@@ -1,0 +1,12 @@
+{
+  "name": "menusprite",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MenuSprite brand and product landing page. Native macOS app planning.",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "check": "node --check site/app.js && node --check scripts/build.mjs && node --check scripts/serve.mjs"
+  }
+}

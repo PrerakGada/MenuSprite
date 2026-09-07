@@ -1,0 +1,67 @@
+{
+  "name": "MenuSprite",
+  "tagline": "Make your menu bar your own.",
+  "platform": "macOS",
+  "direction": "Slim rail",
+  "pose": "Arranger",
+  "meaning": "The little operator behind your menu bar, actively customizing an item.",
+  "colors": {
+    "violet": "#7652E7",
+    "lavender": "#B8A1F3",
+    "mint": "#78DFBD",
+    "ink": "#231D33",
+    "muted": "#686174",
+    "paper": "#FDFCFF",
+    "lilac": "#F1EDFC"
+  },
+  "typography": {
+    "web": "Manrope",
+    "fallback": "system-ui, sans-serif"
+  },
+  "variants": [
+    {
+      "file": "variants/menusprite-icon-light.png",
+      "role": "primary app icon",
+      "format": "PNG",
+      "background": "opaque pale lilac",
+      "sha256": "bdb05150417b27a0bb218de8c5ef06b276dcaa05f34b0c6b14c4f5515a3ea32f",
+      "bytes": 1385492,
+      "width": 1254,
+      "height": 1254
+    },
+    {
+      "file": "variants/menusprite-icon-dark.png",
+      "role": "dark app icon",
+      "format": "PNG",
+      "background": "opaque indigo",
+      "sha256": "5317cf4e58153d7e1846815c08a5576830fabd80d959351b865b2db9c3f5949b",
+      "bytes": 1394648,
+      "width": 1254,
+      "height": 1254
+    },
+    {
+      "file": "variants/menusprite-logo-flat.png",
+      "role": "flat logo",
+      "format": "PNG",
+      "background": "opaque white",
+      "sha256": "c9ecf994937af0625536c63ec9ec9ad4a8a628f4ab69982f563b3030fe105225",
+      "bytes": 801594,
+      "width": 1254,
+      "height": 1254
+    }
+  ],
+  "nativeAppStatus": "planning",
+  "openSourceStatus": "possible later; no license selected",
+  "spriteLibrary": [
+    "Peek",
+    "Bitwing",
+    "Droplet",
+    "Mochi",
+    "Comet",
+    "Bud",
+    "Batlet",
+    "Tilekin",
+    "Orbit",
+    "Fold"
+  ]
+}
