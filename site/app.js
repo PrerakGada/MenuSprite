@@ -1,5 +1,22 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+const copyInstall = $('#copy-install');
+copyInstall.hidden = false;
+copyInstall.addEventListener('click', async () => {
+  const command = $('#install-command');
+  const status = $('#copy-status');
+  try {
+    await navigator.clipboard.writeText(command.textContent);
+    status.textContent = 'Copied. Paste into Terminal to install.';
+  } catch {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(command);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    status.textContent = 'Copy the selected command, then paste it into Terminal.';
+  }
+});
 const widget = $('#custom-widget');
 const preview = $('#desktop-preview');
 let uploadUrl;

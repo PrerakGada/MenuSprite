@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#FDFCFF">
   <title>MenuSprite — Make your Mac’s menu bar your own</title>
-  <meta name="description" content="A native macOS menu bar playground in the making. Arrange your tools, build custom widgets, and give your menu bar a little personality. Explore the interactive concept.">
+  <meta name="description" content="Download the MenuSprite preview for Apple Silicon Macs on macOS 26+. Customize your menu bar with system monitoring, Claude/Codex usage, and keep-awake tools. Install with Homebrew or download the signed, notarized app.">
   <meta property="og:title" content="MenuSprite — Make your menu bar your own">
-  <meta property="og:description" content="A little sprite. A menu bar full of possibilities. Explore a native Mac menu bar playground in the making.">
+  <meta property="og:description" content="The MenuSprite public preview is here. System monitoring, customizable menu bar readouts, and keep-awake tools for Apple Silicon Macs on macOS 26+.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://menusprite.prerakgada.in/">
   <meta name="twitter:card" content="summary">
@@ -31,17 +31,41 @@
   <header class="site-header wrap">
     <a class="wordmark" href="#" aria-label="MenuSprite home"><img src="/assets/icon-light.png" alt="" width="44" height="44">MenuSprite</a>
     <nav aria-label="Main navigation"><a href="#playground">Playground</a><a href="#idea">The idea</a><a href="#sprites">Sprites</a></nav>
-    <a class="header-status" href="#status"><span class="status-dot"></span>In the making</a>
+    <a class="header-status" href="#download"><span class="status-dot"></span>Download</a>
   </header>
   <main id="main">
     <section class="hero wrap">
       <div class="hero-copy">
         <p class="platform"><span class="mac-glyph" aria-hidden="true">⌘</span> A little something, just for your Mac.</p>
         <h1>Make your menu bar<br>your own.</h1>
-        <p class="hero-description">Your tools. Your style. A little personality.<br>Meet the native macOS playground for the tiny strip<br class="desktop-break"> that does a whole lot.</p>
-        <div class="hero-actions"><a class="button primary" href="#playground">Play with your menu bar <span aria-hidden="true">↗</span></a><a class="text-link" href="#idea">See what we’re building</a></div>
+        <p class="hero-description">Your tools. Your style. A little personality.<br>Start with live system monitoring and keep-awake tools.<br class="desktop-break"> The native Mac app is ready to try.</p>
+        <div class="hero-actions"><a class="button primary" href="https://github.com/PrerakGada/menusprite-releases/releases/download/v0.5.5-preview.1/MenuSprite-0.5.5-preview.1-arm64-installer3.dmg">Download for Mac <span aria-hidden="true">↓</span></a><a class="text-link" href="#download">Installation instructions</a></div>
+        <p class="hero-requirements">Free public preview · Apple Silicon · macOS 26+</p>
       </div>
       <div class="hero-mascot"><img src="/assets/icon-light.png" alt="A lavender sprite adjusting a mint item in a slim purple menu bar" width="1254" height="1254" fetchpriority="high"><span class="handwritten">a tiny operator.<br>a lot of possibilities.</span></div>
+    </section>
+
+    <section class="download-section wrap" id="download" aria-labelledby="download-title">
+      <div class="download-surface">
+        <div class="download-heading"><div><p class="release-label"><span class="status-dot"></span>0.5.5 Preview 1</p><h2 id="download-title">Make room for MenuSprite.</h2></div><p>For Apple Silicon Macs running macOS 26 Tahoe or later.<br>Developer ID signed and notarized by Apple.</p></div>
+        <div class="install-methods">
+          <article class="install-method" aria-labelledby="homebrew-title">
+            <h3 id="homebrew-title">Install with Homebrew</h3>
+            <p>Open Terminal, paste this command, and press Return.</p>
+            <div class="install-command"><code id="install-command">brew install --cask prerakgada/tap/menusprite</code><button id="copy-install" type="button" aria-label="Copy Homebrew install command" hidden>Copy</button></div>
+            <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+            <p>Then open <strong>MenuSprite</strong> from Applications.</p>
+            <p class="install-help">Uses Prerak’s Homebrew tap. New to Homebrew? <a href="https://brew.sh/" target="_blank" rel="noopener noreferrer">Get Homebrew</a>, or use the DMG installer.</p>
+          </article>
+          <article class="install-method" aria-labelledby="dmg-title">
+            <h3 id="dmg-title">Or drag it into Applications</h3>
+            <p>No Terminal needed.</p>
+            <a class="button secondary dmg-download" href="https://github.com/PrerakGada/menusprite-releases/releases/download/v0.5.5-preview.1/MenuSprite-0.5.5-preview.1-arm64-installer3.dmg">Download for Mac <span class="download-size">DMG installer</span><span aria-hidden="true">↓</span></a>
+            <ol class="install-steps"><li>Open the downloaded <strong>.dmg</strong> file.</li><li>Drag <strong>MenuSprite</strong> onto the <strong>Applications</strong> shortcut in the installer window.</li><li>Open MenuSprite from Applications. Confirm <strong>Open</strong> if macOS asks, then eject the installer disk.</li></ol>
+          </article>
+        </div>
+        <div class="preview-details"><div><h3>Your first few minutes</h3><p>Choose your readings and appearance in <strong>Monitoring &amp; Sprites</strong>. CPU, RAM, power, network, and available fan/temperature readings live in your menu bar. Click CPU, RAM, or Power for a closer look at app usage.</p><p>Add Claude and Codex usage readings from Quick start, with day-by-day pace colors and editable labels. Icons and text can use separate colors, and readouts have a little breathing room. Keep-awake rules and Permissions &amp; Access are included. Battery charging controls, closed-lid overrides, and the full visual builder are still to come.</p></div><a class="text-link" href="https://github.com/PrerakGada/menusprite-releases/releases/tag/v0.5.5-preview.1" target="_blank" rel="noopener noreferrer">Release notes &amp; checksums <span aria-hidden="true">↗</span></a></div>
+      </div>
     </section>
 
     <section class="playground-section wrap" id="playground" aria-labelledby="playground-title">
@@ -93,14 +117,16 @@
 
     <section class="principles-section wrap"><div class="principle"><span class="principle-symbol" aria-hidden="true">⌘</span><h3>At home on your Mac.</h3><p>Built around native macOS technology. This is a menu bar app, through and through.</p></div><div class="principle"><span class="principle-symbol" aria-hidden="true">◌</span><h3>A quiet little helper.</h3><p>Low idle CPU, a small memory footprint, and careful background work are core design goals.</p></div><div class="principle"><span class="principle-symbol" aria-hidden="true">♡</span><h3>Yours to make yours.</h3><p>A personal project with a free-app goal. Starting with daily use, with open source a possibility for later.</p></div></section>
 
-    <section class="status-section wrap" id="status"><div class="status-card"><div class="status-copy"><p class="status-line"><span class="status-dot"></span>Small beginnings. Plenty of possibility.</p><h2>Made for the Mac<br>I use every day.</h2><p>MenuSprite started with a simple wish: one lightweight place to organize my menu bar and build the little tools I want to use.</p><p>The name and visual direction are taking shape. Next comes the native app, starting with the core menu bar workflow.</p><a class="author" href="https://prerakgada.in" target="_blank" rel="noopener noreferrer">Prerak Gada <span>Creator of MenuSprite ↗</span></a></div><div class="status-aside"><img src="/assets/icon-light.png" alt="MenuSprite Slim rail app icon" width="180" height="180" loading="lazy"><strong>In the making</strong><p>Product design and planning.<br>No app download or release date yet.</p><a class="button secondary" href="#playground">Try the browser concept</a></div></div></section>
+    <section class="status-section wrap" id="status"><div class="status-card"><div class="status-copy"><p class="status-line"><span class="status-dot"></span>Small beginnings. Plenty of possibility.</p><h2>Made for the Mac<br>I use every day.</h2><p>MenuSprite started with a simple wish: one lightweight place to organize my menu bar and build the little tools I want to use.</p><p>The public preview brings system monitoring, Claude/Codex usage, configurable readouts, permissions, and keep-awake tools to your Mac. The visual builder and sprite library shown here are concepts for what comes next.</p><a class="author" href="https://prerakgada.in" target="_blank" rel="noopener noreferrer">Prerak Gada <span>Creator of MenuSprite ↗</span></a></div><div class="status-aside"><img src="/assets/icon-light.png" alt="MenuSprite Slim rail app icon" width="180" height="180" loading="lazy"><strong>The preview is here</strong><p>Version 0.5.5 Preview 1.<br>Free to download and try.</p><a class="button secondary" href="#download">Get MenuSprite</a></div></div></section>
 
     <section class="faq-section wrap" aria-labelledby="faq-title"><h2 id="faq-title">A few things to know.</h2><div class="faq-list">
-      <details><summary>Can I download MenuSprite yet?<span aria-hidden="true">+</span></summary><p>Not yet. This site shares the concept and lets you try a small interactive preview. The native macOS app is still being planned; there isn’t a release date or a downloadable build.</p></details>
-      <details><summary>Will it be free and open source?<span aria-hidden="true">+</span></summary><p>The goal is a free app that replaces the need for several extra paid utilities in this workflow. It starts as a personal project. Open sourcing it is a possibility for later; a license and public source release haven’t been decided.</p></details>
+      <details><summary>Can I download MenuSprite yet?<span aria-hidden="true">+</span></summary><p>Yes. Version 0.5.5 Preview 1 is available for Apple Silicon Macs on macOS 26 Tahoe or later. <a href="#download">Install with Homebrew or download the DMG</a>. It is Developer ID signed and notarized by Apple. Intel Macs and older macOS versions aren’t supported by this build.</p></details>
+      <details><summary>What’s included in the preview?<span aria-hidden="true">+</span></summary><p>System monitoring, configurable menu-bar readouts, CPU/RAM/Power app-usage panels, Permissions &amp; Access, and ordinary keep-awake rules. Sensor availability varies by Mac; CPU-temperature mapping currently targets the tested M5 family. Per-app Power is derived from CPU energy and does not include GPU, display, or other component power. Battery charging controls, closed-lid overrides, the full visual builder, and marketplace are not in this preview.</p></details>
+      <details><summary>How do I update MenuSprite?<span aria-hidden="true">+</span></summary><p>For a Homebrew installation, run <code>brew update</code>, then <code>brew upgrade --cask prerakgada/tap/menusprite</code>. For a manual installation, quit MenuSprite, open the new DMG, and drag MenuSprite onto Applications. Choose <strong>Replace</strong> when Finder asks, then open the app from Applications and eject the installer disk. Your saved settings stay in place.</p></details>
+      <details><summary>Is it free and open source?<span aria-hidden="true">+</span></summary><p>The public preview is free to download and use. MenuSprite starts as a personal project with a free-app goal. Open sourcing it is a possibility for later; a license and public source release haven’t been decided.</p></details>
       <details><summary>Can it customize every existing menu bar app?<span aria-hidden="true">+</span></summary><p>Menu bar organization and custom items are both part of the vision. The exact control available over other apps’ items still needs to be validated against macOS capabilities. We’re not promising unrestricted control of every app.</p></details>
-      <details><summary>What about system data, logs, and scripts?<span aria-hidden="true">+</span></summary><p>The plan is to let you choose which sources to enable and when they update, within macOS permissions. Visual building blocks will be the starting point, with basic scripting for more personal behavior. This browser concept uses example readings and never accesses your Mac’s system logs.</p></details>
-      <details><summary>Do I need to know how to code?<span aria-hidden="true">+</span></summary><p>The intended workflow starts in a visual GUI: choose your items, change their appearance, and connect behavior. Scripting is an optional way to extend it, not a requirement for customizing your bar.</p></details>
+      <details><summary>What about system data, logs, and scripts?<span aria-hidden="true">+</span></summary><p>The native preview reads system metrics for the monitoring sprites you enable. Permissions &amp; Access shows MenuSprite’s own access and supported settings actions; opening that page does not request permissions. Custom log sources, scripts, and visual building blocks are future work. This browser concept uses example readings and never accesses your Mac’s system logs.</p></details>
+      <details><summary>Do I need to know how to code?<span aria-hidden="true">+</span></summary><p>No. Choose your readings and change their appearance in the native app’s Monitoring &amp; Sprites window. The DMG installer also lets you install without Terminal. The more flexible visual builder shown on this page is still a concept.</p></details>
       <details><summary>Is a Windows version planned?<span aria-hidden="true">+</span></summary><p>No. MenuSprite is specifically for the macOS menu bar. Native Mac integration and a small resource footprint are the focus.</p></details>
     </div></section>
 

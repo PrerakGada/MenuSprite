@@ -1,0 +1,9 @@
+# Deploy only the standalone website and its static build inputs.
+*
+!site
+!site/**
+!scripts
+!scripts/build.mjs
+!package.json
+!vercel.json
+!.vercelignore

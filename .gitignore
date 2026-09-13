@@ -1,8 +1,51 @@
+# Generated website and native build products
 .DS_Store
 .vercel/
 dist/
 node_modules/
+native/.build/
+native/.swiftpm/
+__pycache__/
+*.pyc
+
+# Machine-local agent context and operational records
+/AGENTS.md
+/CLAUDE.md
+/.claude/
+/.codex/
+/_memory/
+/ops
+
+# Credentials, signing material, local databases and diagnostics
 .env*
 !.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+*.keychain*
+.auth/
+auth.json
+accounts.json
+credentials.json
+secrets.json
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+*.jsonl
+*.xcuserstate
+xcuserdata/
 
-.vercel
+# Release outputs belong on the release channel, not in source
+*.app/
+*.dmg
+*.dSYM/
+*.zip
+!site/assets/menusprite-brand.zip

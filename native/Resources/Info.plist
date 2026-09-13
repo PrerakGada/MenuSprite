@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>MenuSprite</string>
+	<key>CFBundleExecutable</key>
+	<string>MenuSprite</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>in.prerakgada.MenuSprite</string>
+	<key>CFBundleName</key>
+	<string>MenuSprite</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.5.5</string>
+	<key>CFBundleVersion</key>
+	<string>16</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>You chose Request Access for Calendars in MenuSprite. This foundation asks for full calendar consent only and does not read or change events.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>You chose Request Access for Camera in MenuSprite. This foundation asks for consent only and does not open a camera or take photos.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>You chose Request Access for Contacts in MenuSprite. This foundation asks for consent only and does not read or change contacts.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSLocationUsageDescription</key>
+	<string>You chose Request Access for Location Services in MenuSprite. This foundation asks for consent only and does not request your location.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>You chose Request Access for Location Services in MenuSprite. This foundation asks for when-in-use consent only and does not request your location.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>You chose Request Access for Microphone in MenuSprite. This foundation asks for consent only and does not record sound.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>You chose Request Access for Photos in MenuSprite. This foundation asks for read/write consent only and does not load or change photos.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>You chose Request Access for Reminders in MenuSprite. This foundation asks for consent only and does not read or change reminders.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>You chose Request Access for Speech Recognition in MenuSprite. This foundation asks for consent only and does not transcribe or send audio.</string>
+</dict>
+</plist>
