@@ -9,6 +9,11 @@
 
 /* Public preview installation, kept separate from the browser concept. */
 .hero-requirements{margin-top:16px;font-size:12px;color:var(--muted)}
+.github-support{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin-top:18px;font-size:12px;line-height:1.5}
+.github-star{display:inline-flex;align-items:center;gap:7px;padding:8px 12px;border:1px solid #ded4ee;border-radius:8px;color:var(--violet-dark);font-weight:700;white-space:nowrap;transition:background-color .15s,border-color .15s}
+.github-star .icon{width:15px;height:15px}
+.github-star:hover{background:var(--lilac);border-color:var(--violet)}
+@media(max-width:760px){.github-support{justify-content:center}}
 .download-section{padding-bottom:80px}
 .download-surface{padding:40px;border:1px solid #e2d8f6;border-radius:24px;background:var(--lilac)}
 .download-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:40px;padding-bottom:32px;border-bottom:1px solid #ded4ee}
