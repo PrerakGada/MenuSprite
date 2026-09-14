@@ -51,7 +51,8 @@ The visual builder is inspired by Scratch. See the
 - A choice of sprite characters; the main app logo is a sprite operating a bar.
 - Native macOS technology, low idle CPU, small RAM footprint, and leak prevention.
 - Build for Prerak's own daily use first, with the goal of avoiding extra paid
-  utilities. MIT license selected 14 September 2026; public source publication pending.
+  utilities. MIT license selected and source published 14 September 2026 at
+  [PrerakGada/MenuSprite](https://github.com/PrerakGada/MenuSprite).
 
 The app aims to consolidate Mac utilities with deep personal customization.
 Detailed tool windows, overlays, execution/package
@@ -89,7 +90,8 @@ The native app does not use or host the website. Build details: `../native/READM
 The page links to the actual public release and Prerak's Homebrew tap. It states
 the preview's compatibility and hardware-control limits, and explains installation,
 first launch and updates. The public distribution repository contains release
-assets and metadata; application source remains local. The site has no waitlist
+assets and metadata; application source is published separately at
+[PrerakGada/MenuSprite](https://github.com/PrerakGada/MenuSprite). The site has no waitlist
 backend or claimed performance guarantee.
 
 ## Website acceptance map

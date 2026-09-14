@@ -1,8 +1,9 @@
 # MenuSprite
 
 A native macOS menu-bar monitor with customizable readouts and app/process detail
-panels. This repository distributes public preview binaries; application source
-and internal planning are not published here.
+panels. This repository distributes public preview binaries. The complete
+[application source](https://github.com/PrerakGada/MenuSprite) is available under
+the [MIT license](https://github.com/PrerakGada/MenuSprite/blob/main/LICENSE).
 
 ## Install
 

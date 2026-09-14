@@ -4,9 +4,10 @@ A native macOS playground for customizable tools called sprites, in the making.
 
 Landing page: https://menusprite.prerakgada.in/
 
-**MenuSprite is licensed under [MIT](LICENSE); public source publication is being prepared.**
-The public release repository below distributes binaries. See the
-[publication audit and remaining steps](docs/open-source-readiness.md),
+**MenuSprite is open source under the [MIT license](LICENSE).**
+The complete source is at [PrerakGada/MenuSprite](https://github.com/PrerakGada/MenuSprite).
+The separate release repository below distributes binaries. See the
+[publication audit](docs/open-source-readiness.md),
 [security policy](SECURITY.md), and [third-party notices](THIRD_PARTY_NOTICES.md).
 
 [Download and installation guide](https://menusprite.prerakgada.in/#download).

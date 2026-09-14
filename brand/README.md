@@ -51,4 +51,5 @@ abstract unrelated sculptures, or a controller-like bar with oversized cutouts.
 The downloadable brand pack contains these variants, this guide, the manifest,
 and the MIT license. MenuSprite's project artwork is covered by MIT; the license
 is at the repository root and included as `LICENSE` inside the brand pack.
-No trademark clearance is asserted. Public source publication is being prepared.
+No trademark clearance is asserted. Public source is available at
+https://github.com/PrerakGada/MenuSprite.

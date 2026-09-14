@@ -51,7 +51,7 @@
     }
   ],
   "nativeAppStatus": "planning",
-  "openSourceStatus": "MIT licensed; public source publication pending",
+  "openSourceStatus": "MIT licensed; source available at https://github.com/PrerakGada/MenuSprite",
   "license": "MIT",
   "spriteLibrary": [
     "Peek",
