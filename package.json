@@ -2,6 +2,7 @@
   "name": "menusprite",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "MenuSprite brand and product landing page. Native macOS app planning.",
   "type": "module",
   "scripts": {

@@ -13,5 +13,6 @@ has no npm runtime dependencies. Documentation links to other utilities as resea
 references; those links are not a license grant to copy their implementations.
 Check ownership and the actual license before incorporating any outside code.
 
-The MenuSprite source license remains to be selected by its owner. These notices
-preserve third-party terms and do not supply a license for MenuSprite itself.
+MenuSprite's own code, documentation and project artwork are covered by the
+[MIT license](LICENSE), selected on 14 September 2026. Third-party components
+retain their own licenses and notices as listed above.

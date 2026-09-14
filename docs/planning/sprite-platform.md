@@ -33,8 +33,9 @@ with creative freedom and a common customizable host.
 
 Community creation, a marketplace for downloading other people's sprites, likes,
 and friends are part of the intended product vision. Their release order and
-exact mechanics are still to be discussed. Open-source licensing and monetization
-are separate undecided questions; a marketplace does not imply paid sprites.
+exact mechanics are still to be discussed. MenuSprite's source uses MIT (selected
+14 September 2026). Monetization and third-party sprite licensing remain separate
+questions; a marketplace does not imply paid sprites.
 
 ## Proposed way to fit the product together
 

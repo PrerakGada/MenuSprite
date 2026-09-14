@@ -34,6 +34,7 @@ binary_dir="$(swift build "${swift_args[@]}" --show-bin-path)"
 mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources" "$build_root/AppIcon.iconset"
 cp "$binary_dir/MenuSprite" "$app_path/Contents/MacOS/MenuSprite"
 cp "$native_root/Resources/Info.plist" "$app_path/Contents/Info.plist"
+cp "$repo_root/LICENSE" "$app_path/Contents/Resources/LICENSE.txt"
 if $public_preview; then
     python3 - "$repo_root/distribution/version.json" "$app_path/Contents/Info.plist" <<'PY'
 import json, plistlib, sys

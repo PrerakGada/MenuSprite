@@ -1,6 +1,6 @@
 # Decisions and discussion
 
-Working draft · updated 8 September 2026
+Working draft · licensing updated 14 September 2026
 
 **Current priority:** [First personal build](../first-personal-build.md). Prerak
 asked to stop overengineering the discussion, defer marketplace and related
@@ -10,6 +10,10 @@ Older platform questions below are not prerequisites for that build.
 **Latest steering:** permissions overview first; go gradually rather than jump
 into an MVP. See [Permissions & Access](../permissions-page.md) and D-24. Do not
 expand the utility implementation plan as the immediate task.
+
+**Licensing update, 14 September 2026:** Prerak selected MIT for MenuSprite. The
+license is in the repository root; public source publication remains pending. This
+supersedes the earlier licensing deferral below without changing marketplace scope.
 
 ## Confirmed before this planning pass
 
@@ -70,7 +74,7 @@ acceptance examples are still unknown.
 | D-12 | Performance budgets | Use the provisional workloads and numbers in acceptance.md, benchmark before treating them as release thresholds | Proposed targets, never measured claims. |
 | D-13 | Meaning of sprite | The whole customizable tool/menu bar item: presentation, interactions, data and behavior | Confirmed correction, 7 September. Character artwork is optional and no longer defines the noun. |
 | D-14 | Entire menu bar appearance | Keep item styling core; whole-bar tint/shapes/background treatment requires explicit scope choice and native validation | Candidate; not implied by custom item font/color support. |
-| D-15 | Public product policy | Preserve free-app goal and later open-source possibility | License, public launch, pricing model, update channel, and support promises remain undecided. |
+| D-15 | Public product policy | MIT for MenuSprite source, documentation and project artwork | Confirmed by Prerak, 14 September 2026. Public source publication is pending; third-party sprite terms, monetization and support promises remain separate decisions. |
 | D-16 | Broader utility scope | Include system helpers, desktop/app switching, Homebrew, monitors and shortcuts | Confirmed intent, 7 September; do not exclude these because they exceed menu bar geometry. |
 | D-17 | Sprite icon and menu bar visibility | Every sprite has an identity icon/mini logo; showing it in the menu bar is optional and independent of enablement | Confirmed by Prerak, 7 September. Hidden from the bar does not mean iconless or disabled. |
 | D-18 | Marketplace and community | Retain the vision for later; no further marketplace/social design needed for personal use | Deferred by Prerak, 8 September. Not part of the first personal build and not an architecture prerequisite. |

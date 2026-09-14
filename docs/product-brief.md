@@ -51,7 +51,7 @@ The visual builder is inspired by Scratch. See the
 - A choice of sprite characters; the main app logo is a sprite operating a bar.
 - Native macOS technology, low idle CPU, small RAM footprint, and leak prevention.
 - Build for Prerak's own daily use first, with the goal of avoiding extra paid
-  utilities. Potential future open source; no public licensing commitment yet.
+  utilities. MIT license selected 14 September 2026; public source publication pending.
 
 The app aims to consolidate Mac utilities with deep personal customization.
 Detailed tool windows, overlays, execution/package

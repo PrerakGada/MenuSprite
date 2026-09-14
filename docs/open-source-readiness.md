@@ -1,7 +1,7 @@
 # Source publication audit — 14 September 2026
 
-The source has been prepared for publication, but **the owner has not selected a
-source license and the source repository has not been published**. The existing
+The source has been prepared for publication. **The owner selected [MIT](../LICENSE)
+on 14 September 2026; the source repository has not yet been published**. The existing
 [website](https://menusprite.prerakgada.in/) and
 [GitHub release repository](https://github.com/PrerakGada/menusprite-releases)
 distribute preview binaries. Describe the project as planned open source until
@@ -81,7 +81,9 @@ index; the push hook scans the index and all refs. Use no-reply commit attributi
 and synthetic fixtures. Review new binary assets manually; scans are not a substitute
 for that review. Do not bypass a failed check to publish.
 
-Before the first public source push, select and add the license, review its coverage
-of the artwork, and publish the audited Git repository to a dedicated source remote.
+The MIT license covers MenuSprite's own code, documentation and project artwork;
+third-party components retain their own notices. The brand pack includes the license,
+and new native bundles will include it in `Contents/Resources/LICENSE.txt`.
+Before the first public source push, publish the audited Git repository to a dedicated source remote.
 Keep existing installer URLs and the binary release repository working. A source
 license is a separate decision from making downloads free.

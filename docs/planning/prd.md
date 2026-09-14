@@ -30,8 +30,9 @@ still need an inventory; preserve the full-suite replacement ambition.
 
 First user: Prerak. Intended community: Mac users who create, install, customize,
 and share sprites. A marketplace, likes, and friends are now explicit product
-intent. Account/social mechanics, release order, licensing, monetization, and
-broad OS coverage are undecided. Propose independent local operation for installed
+intent. The MenuSprite source license is MIT (selected 14 September 2026).
+Account/social mechanics, release order, third-party sprite licensing, monetization,
+and broad OS coverage are undecided. Propose independent local operation for installed
 sprites, with online services for community features.
 
 ## Confirmed requirements

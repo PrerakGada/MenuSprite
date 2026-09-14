@@ -51,7 +51,8 @@
     }
   ],
   "nativeAppStatus": "planning",
-  "openSourceStatus": "possible later; no license selected",
+  "openSourceStatus": "MIT licensed; public source publication pending",
+  "license": "MIT",
   "spriteLibrary": [
     "Peek",
     "Bitwing",

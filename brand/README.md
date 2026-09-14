@@ -48,6 +48,7 @@ abstract unrelated sculptures, or a controller-like bar with oversized cutouts.
 
 ## Distribution
 
-The downloadable brand pack contains these variants, this guide, and the manifest.
-No open-source license or trademark clearance is asserted. Open sourcing the app
-is a possible later decision, not something already completed.
+The downloadable brand pack contains these variants, this guide, the manifest,
+and the MIT license. MenuSprite's project artwork is covered by MIT; the license
+is at the repository root and included as `LICENSE` inside the brand pack.
+No trademark clearance is asserted. Public source publication is being prepared.
