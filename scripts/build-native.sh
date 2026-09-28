@@ -24,15 +24,20 @@ if ! security find-identity -v -p codesigning | /usr/bin/grep -Fq "$signing_iden
 fi
 
 swift_args=(--package-path "$native_root" -c release)
+product_args=()
 if $public_preview; then
-    swift_args+=(--scratch-path "$build_root/swift" --product MenuSprite --arch arm64 -Xswiftc -DMENUSPRITE_PUBLIC_PREVIEW)
+    swift_args+=(--scratch-path "$build_root/swift" --arch arm64 -Xswiftc -DMENUSPRITE_PUBLIC_PREVIEW)
+    product_args=(--product MenuSprite)
     # The public staging bundle must never inherit a developer helper/installer.
     rm -rf "$app_path"
 fi
-swift build "${swift_args[@]}"
+swift build "${swift_args[@]}" ${product_args[@]+"${product_args[@]}"}
+# The Now Playing adapter is a separate library that /usr/bin/perl loads at run time; the app never links it.
+swift build "${swift_args[@]}" --product NowPlayingBridge
 binary_dir="$(swift build "${swift_args[@]}" --show-bin-path)"
-mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources" "$build_root/AppIcon.iconset"
+mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources" "$app_path/Contents/Frameworks" "$build_root/AppIcon.iconset"
 cp "$binary_dir/MenuSprite" "$app_path/Contents/MacOS/MenuSprite"
+cp "$binary_dir/libNowPlayingBridge.dylib" "$app_path/Contents/Frameworks/libNowPlayingBridge.dylib"
 cp "$native_root/Resources/Info.plist" "$app_path/Contents/Info.plist"
 cp "$repo_root/LICENSE" "$app_path/Contents/Resources/LICENSE.txt"
 if $public_preview; then
@@ -54,13 +59,16 @@ iconutil -c icns "$build_root/AppIcon.iconset" -o "$app_path/Contents/Resources/
 sips -z 112 112 "$artwork" --out "$app_path/Contents/Resources/BrandIcon.png" >/dev/null
 # The menu bar uses the isolated sprite/rail artwork, not the opaque app-icon tile.
 sips -Z 96 "$native_root/Resources/MenuBarArtwork.png" --out "$app_path/Contents/Resources/MenuBarIcon.png" >/dev/null
+bridge_path="$app_path/Contents/Frameworks/libNowPlayingBridge.dylib"
 if $public_preview; then
+    codesign --force --options runtime --timestamp --identifier in.prerakgada.MenuSprite.now-playing --sign "$signing_identity" "$bridge_path"
     codesign --force --options runtime --timestamp --sign "$signing_identity" \
         --entitlements "$native_root/Resources/MenuSprite.entitlements" "$app_path"
 else
     cp "$binary_dir/MenuSpritePowerHelper" "$app_path/Contents/Resources/MenuSpritePowerHelper"
     cp "$native_root/Resources/"*power-helper.sh "$app_path/Contents/Resources/"
     codesign --force --options runtime --timestamp=none --identifier in.prerakgada.MenuSprite.PowerHelper --sign "$signing_identity" "$app_path/Contents/Resources/MenuSpritePowerHelper"
+    codesign --force --options runtime --timestamp=none --identifier in.prerakgada.MenuSprite.now-playing --sign "$signing_identity" "$bridge_path"
     codesign --force --options runtime --timestamp=none --sign "$signing_identity" \
         --entitlements "$native_root/Resources/MenuSprite.entitlements" "$app_path"
 fi

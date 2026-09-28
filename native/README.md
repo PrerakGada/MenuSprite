@@ -246,8 +246,11 @@ Remove and Auto-switch. Saved accounts are Claude Switcher's own (`claude-switch
 `codex-switcher:<email>` keychain items and `~/.config/claude-switcher/accounts.json`).
 
 - The network is used at most every 5 minutes per login, sooner after a login change or Refresh.
-  Keychain reads are native and never prompt; rotated tokens are written back only through the
-  credential gate, and only if the store still holds the pair that was refreshed.
+  The CLIs' live Claude login is read through `/usr/bin/security`, as Claude Code reads it (a direct
+  Security-framework read is a partition mismatch and makes macOS ask for the keychain password
+  every time; `kSecUseAuthenticationUIFail` does not stop that on current macOS). The Claude Code and Codex CLIs' own logins are
+  strictly read-only — never refreshed, never written back; only switcher-saved copies rotate,
+  through the credential gate and only if the item still holds the pair that was refreshed.
 - A Claude switch writes the live item the way Claude Code does and confirms the replaced
   login's account with Anthropic before saving it. Running Claude Code sessions follow within
   about 30 seconds; running Codex sessions keep their account.
@@ -278,3 +281,18 @@ The dashboard contains animated power flow, battery graphs, an editable charge
 band, Top Up / Discharge actions and CPU-energy app ranking. Charge actions require
 the developer build’s installed helper and no competing charge controller. Opening
 it does not change charging. Details and validation: [energy dashboard](../docs/energy-dashboard.md).
+
+## Dynamic Island
+
+`docs/dynamic-island.md` describes the island. It is off by default (Settings › Dynamic Island).
+Check it without putting anything on screen:
+
+```sh
+swift test --package-path native --filter IslandKitTests
+MenuSprite --island-render <dir> [--section <id>|all] [--size compact|spacious|custom] [--wait <s>] [--start]
+MenuSprite --island-render <dir> --states      # the shell's own states through the controller's logic
+MenuSprite --settings-render <dir>             # every settings tab
+```
+
+The release build also compiles `NowPlayingBridge` (a dylib `/usr/bin/perl` loads for Now Playing) and
+signs it into `Contents/Frameworks`; `scripts/build-native.sh` does this.

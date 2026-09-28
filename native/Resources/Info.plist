@@ -22,12 +22,18 @@
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>The Volume mixer changes an app's volume by passing that app's sound through MenuSprite as it plays. Only apps whose volume or output you change are included, and audio is never recorded or kept.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>You chose Request Access for Calendars in MenuSprite. This foundation asks for full calendar consent only and does not read or change events.</string>
+	<string>MenuSprite shows your upcoming events in the Dynamic Island. It only reads your calendars, and your events never leave this Mac.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>You chose Request Access for Camera in MenuSprite. This foundation asks for consent only and does not open a camera or take photos.</string>
+	<string>MenuSprite uses the camera only for the Dynamic Island’s mirror, and only while you have it open. Nothing is recorded, saved or sent anywhere.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>You chose Request Access for Contacts in MenuSprite. This foundation asks for consent only and does not read or change contacts.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>MenuSprite saves your screenshots and screen recordings to the Desktop unless you choose another folder.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>MenuSprite watches the folder you chose for downloads so the Dynamic Island can show their progress and say when they finish. It reads only file names, sizes and dates, and nothing leaves your Mac.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSLocationUsageDescription</key>
@@ -35,7 +41,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>You chose Request Access for Location Services in MenuSprite. This foundation asks for when-in-use consent only and does not request your location.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>You chose Request Access for Microphone in MenuSprite. This foundation asks for consent only and does not record sound.</string>
+	<string>MenuSprite records your microphone only during a screen recording you start, and only when “Record the microphone” is on.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>You chose Request Access for Photos in MenuSprite. This foundation asks for read/write consent only and does not load or change photos.</string>
 	<key>NSPrincipalClass</key>

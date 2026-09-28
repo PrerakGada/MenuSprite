@@ -28,6 +28,6 @@ The DMG and ZIP contain the same Developer ID signed and Apple-notarized 0.5.5 (
 
 Includes system monitoring, configurable readouts, native CPU/RAM/Power panels, Permissions & Access, ordinary keep-awake, and optional Claude/Codex usage and account tools. AI readings contact the provider using its CLI login; they may refresh an expiring token. Saved accounts share Claude Switcher storage. There is no MenuSprite account or telemetry.
 
-The public preview excludes privileged helpers, charging and closed-lid controls, and the experimental Work & Clients report. Fan control, capture, clipboard history, marketplace and sharing remain outside this build. Per-app Power is CPU-energy-derived, and hardware sensors vary by Mac. Account-limit percentages are not project AI costs.
+The public preview excludes privileged helpers, charging and closed-lid controls, and the experimental Work & Clients report. Charge limiting is not only a build exclusion: it needs firmware that publishes a writable charge-inhibit key, and recent Apple Silicon publishes none, so it cannot be held on that hardware in any build. Fan control, capture, clipboard history, marketplace and sharing remain outside this build. Per-app Power is CPU-energy-derived, and hardware sensors vary by Mac. Account-limit percentages are not project AI costs.
 
 Distributed through the `prerakgada/tap` tap, not the official Homebrew Cask catalog. This remains a public preview.

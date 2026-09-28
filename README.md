@@ -41,6 +41,12 @@ closed-lid controls. [Release verification](docs/release.md).
 Local 0.5.0 adds the [Battery & Power dashboard](docs/energy-dashboard.md).
 Click PWR for live flow, battery charts and charge controls. Hardware actions need
 the signed administrator helper and a handover from any other charge controller.
+They also need firmware that publishes a writable charge-inhibit key, and recent
+Apple Silicon does not — on the tested M5 Max running macOS 27 there is none, so
+MenuSprite cannot hold a charge limit on that hardware however it is configured.
+Running from the battery with the cable connected needs only the adapter switch and
+still works. Apple's own charge limit is a separate mechanism MenuSprite does not
+use. Measurements: [Power Controls](docs/power-controls.md).
 
 ```sh
 ./scripts/build-native.sh --install
