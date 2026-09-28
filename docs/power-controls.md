@@ -1,5 +1,8 @@
 # Power Controls — first implementation, 8 September 2026
 
+> **Superseded 24 September 2026:** a charge limit *is* held on Nebula — any value 21–100%, through macOS's own charge limit (PowerUIAgent `mclLimitValue`), the way AlDente does it. The SMC findings below still stand; the conclusion drawn from them does not. See `charge-limit.md`.
+
+
 The local 0.5.0 update adds the [Battery & Power dashboard](energy-dashboard.md)
 with live flow, charts and the same guarded battery backend. The hardware
 acceptance boundary below still applies.
@@ -108,13 +111,79 @@ launch daemon first so no active controller can race recovery.
 ## Hardware boundary and validation
 
 Charge controls use undocumented firmware interfaces; they are not macOS privacy
-grants. The current Mac exposes four-byte **CHTE** and one-byte **CHIE** controls,
-BUIC battery percentage and AC-W physical power presence. Their sizes were checked
-read-only, also from the actual signed MenuSprite process. The backend supports
-known CH0B/CH0C or CHTE and CH0I/CH0J/CHIE layouts. It refuses the newer complete
-bfF0/bfD0/bfE0 range-control family until a separate backend is validated. Presence
-of a key is capability evidence, not proof a hardware write succeeds; every write
-requires success and readback confirmation.
+grants. The backend supports known CH0B/CH0C or CHTE charge keys with a
+CH0I/CH0J/CHIE adapter key, and refuses the bfF0/bfD0/bfE0 range-control family
+until a separate backend is validated. Presence of a key is capability evidence,
+not proof a hardware write succeeds; every write requires success and readback
+confirmation.
+
+### Nebula has no writable charge key — measured 15 September 2026
+
+An earlier revision of this document claimed "the current Mac exposes four-byte
+CHTE and one-byte CHIE controls". **That is no longer true of Nebula** (M5 Max,
+macOS 27.0 26A428), and the reason matters more than the key list.
+
+**Presence is not capability.** Every SMC key carries an attributes byte whose
+`0x40` bit is write permission. A key can be present, readable and refuse every
+write with SMC error `0x86`. The backend previously treated presence alone as
+evidence, which is how it could have offered controls this firmware never
+accepts. `BatteryHardware.info(_:)` now reads that byte and `chargeKeys` /
+`adapterKey` only return keys that are the right width **and** writable.
+
+Measured on this Mac, unprivileged and again as root, identical both times:
+
+| Key | attributes | Writable |
+|---|---|---|
+| `CHIE` | `0xd4` | **yes** — confirmed by a real write |
+| `CHIB` `CHIC` `CHIL` `CHIO` | `0x94` | no |
+| `CHCC` `CHCE` `CHCR` `bfI0` `bfJ0` `bfK0` | `0x94` | no |
+| `CHSE` `CHST` `CHRT` `CHSC` `CH0R` `CHOC` `CHTC` | `0x84` | no |
+| `ACLM` | `0x95` | no |
+
+Absent entirely: **`CHTE`, `CH0B`, `CH0C`, `CH0I`, `CH0J`, `CHWA`, `BCLM`,
+`bfF0`, `bfE0`, `bfD0`.** The whole SMC table was enumerated (3,864 keys, 3,776
+resolved) rather than guessed at by name.
+
+The `CHIx` spelling is the old `CH0x` block renamed — `CHIE` really is the
+former `CH0I` — so `CHIB`/`CHIC` look exactly like the `CH0B`/`CH0C`
+charge-inhibit pair. **They are read-only, so the resemblance is a trap.**
+
+**`CHIE` is an adapter switch, not a charge inhibitor — proven by writing it.**
+With the adapter attached at 99%, `CHIE=8` moved `pmset -g batt` from
+`finishing charge` to `discharging` within six seconds; `0` restored
+`AC attached`. Values `1`, `2` and `4` each read back as `8` and produced the
+same discharge, so the register is binary, not a bitfield hiding an inhibit bit.
+
+#### What this Mac can and cannot do
+
+**Can: run from the battery on demand with the cable connected.** This needs
+only the adapter switch. `dischargeSupported` is therefore independent of the
+charge keys — gating it on `chargeSupported`, as it was, hid a control this
+hardware can actually run. A discharge here is a **one-shot**: it reconnects the
+adapter at the target and hands control back, because there is no way to hold a
+band afterwards.
+
+**Cannot: hold a charge limit.** There is no writable charge-inhibit key.
+Approximating one by toggling the adapter would discharge and recharge
+repeatedly — at this machine's measured idle draw a 50–55% band is roughly
+3.6 Wh per swing, several full-equivalent cycles a day, worse for the pack than
+no limit at all. It is deliberately not implemented, and `handle(.battery)`
+refuses `.maintain` on such firmware without writing anything.
+
+Untested write candidates remain (`CHIB`, `CHIC`, `CHIL`, `CHIO`, `CHSE`,
+`CHST`, `CHRT`, `bfI0`) but all are read-only, so there is nothing to try.
+
+#### Validation
+
+`--discharge-validate <dir>` drives the installed app through the real root
+helper: it starts a discharge, confirms the adapter is off in firmware with the
+cable still connected and charge current at zero, stops, and confirms the
+adapter is reconnected with no recovery pending. **12 of 12 checks passed on
+15 September 2026.** Its report carries its own note — that run *does* write
+privileged firmware, and must not claim otherwise.
+
+Still unverified: a full-depth discharge all the way to the target, and physical
+lid behaviour.
 
 See `power-validation.md` for actual test results and measurements. Remaining
 manual acceptance: root installation/XPC authentication/rejection, write/readback

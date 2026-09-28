@@ -171,3 +171,93 @@ private func recoveryURL() throws -> URL {
     snapshot.mode = .discharge
     #expect(snapshot.controlCeiling == 55)
 }
+
+// MARK: - Adapter-only firmware
+//
+// Nebula (M5 Max, macOS 27) publishes CHIE as the only writable charge-related
+// SMC key: every charge-inhibit candidate is present but read-only, so a charge
+// limit cannot be held while an on-demand discharge still can.
+
+/// Presence is not capability. A key can be readable and refuse every write.
+@Test func onlyWritableKeysCountAsControls() {
+    #expect(BatteryHardware.KeyInfo(size: 1, attributes: 0xd4).writable)   // CHIE, proven by a real write
+    #expect(!BatteryHardware.KeyInfo(size: 1, attributes: 0x94).writable)  // CHIB/CHIC, refused with 0x86
+    #expect(!BatteryHardware.KeyInfo(size: 1, attributes: 0x84).writable)
+    #expect(!BatteryHardware.KeyInfo(size: 4, attributes: 0x95).writable)
+}
+
+@Test func adapterOnlyFirmwareSaysWhatItCanAndCannotDo() {
+    let adapterOnly = BatteryHardware.capability(charge: [], adapter: "CHIE")
+    #expect(adapterOnly.contains("CHIE"))
+    #expect(adapterOnly.contains("battery"))
+    #expect(BatteryHardware.capability(charge: [], adapter: nil) == "Charge control unavailable for this firmware")
+    #expect(BatteryHardware.capability(charge: ["CHTE"], adapter: "CHIE").contains("CHTE / CHIE"))
+}
+
+private final class AdapterOnlyHardware: PowerHardware {
+    var values: [String:[UInt8]] = ["CHIE":[0]]
+    var percent = 90
+    var plugged = true
+    var writes: [String] = []
+    func read(_ key: String) -> [UInt8]? { values[key] }
+    func snapshot() -> PowerSnapshot {
+        var s = PowerSnapshot(); s.percent = percent; s.pluggedIn = plugged
+        s.chargeSupported = false          // no writable charge-inhibit key
+        s.dischargeSupported = true        // the adapter switch exists
+        s.adapterEnabled = values["CHIE"] == [0]
+        return s
+    }
+    func chargeValues(allow: Bool) -> [String:[UInt8]] { [:] }
+    func adapterValues(allow: Bool) -> [String:[UInt8]] { ["CHIE":[allow ? 0 : 8]] }
+    func writeControl(_ key: String, _ bytes: [UInt8]) throws { values[key] = bytes; writes.append(key) }
+}
+
+@Test @MainActor func dischargeRunsWithoutAnyChargeKey() throws {
+    let h = AdapterOnlyHardware(), url = try recoveryURL()
+    let c = PowerController(hardware: h, recoveryURL: url, execute: { _,_ in "" })
+    _ = c.handle(.init(.battery, mode: .discharge, band: .init(lower: 50, upper: 55)))
+    #expect(c.snapshot().mode == .discharge)
+    #expect(h.values["CHIE"] == [8], "the adapter must actually be switched off")
+    #expect(c.snapshot().error == nil)
+}
+
+/// Reaching the target hands control back instead of settling into a band this
+/// firmware has no way to hold.
+@Test @MainActor func dischargeStopsAtTheTargetOnAdapterOnlyFirmware() throws {
+    let h = AdapterOnlyHardware(), url = try recoveryURL()
+    let c = PowerController(hardware: h, recoveryURL: url, execute: { _,_ in "" })
+    _ = c.handle(.init(.battery, mode: .discharge, band: .init(lower: 50, upper: 55)))
+    #expect(h.values["CHIE"] == [8])
+    h.percent = 55
+    c.tick()
+    #expect(c.snapshot().mode == .off)
+    #expect(h.values["CHIE"] == [0], "the adapter must be reconnected at the target")
+}
+
+@Test @MainActor func aChargeLimitIsRefusedWhenNoChargeKeyExists() throws {
+    let h = AdapterOnlyHardware(), url = try recoveryURL()
+    let c = PowerController(hardware: h, recoveryURL: url, execute: { _,_ in "" })
+    let s = c.handle(.init(.battery, mode: .maintain, band: .init(lower: 50, upper: 55)))
+    #expect(s.mode == .off)
+    #expect(s.error?.contains("charge limit") == true)
+    #expect(h.writes.isEmpty, "nothing may be written for a control the firmware cannot run")
+}
+
+/// Asking to discharge to a level already reached is a no-op, not an adapter cut.
+@Test @MainActor func dischargeBelowTheTargetIsRefused() throws {
+    let h = AdapterOnlyHardware(), url = try recoveryURL()
+    h.percent = 40
+    let c = PowerController(hardware: h, recoveryURL: url, execute: { _,_ in "" })
+    let s = c.handle(.init(.battery, mode: .discharge, band: .init(lower: 30, upper: 55)))
+    #expect(s.mode == .off)
+    #expect(h.writes.isEmpty)
+}
+
+@Test func lowPowerRequestsRoundTripAndOlderRequestsStillDecode() throws {
+    let request = try JSONDecoder().decode(PowerRequest.self, from: JSONEncoder().encode(PowerRequest(.lowPower, lowPower: true)))
+    #expect(request.action == .lowPower && request.lowPower == true)
+    // An app older than this control sends no `lowPower` key at all.
+    var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(PowerRequest(.status))) as! [String: Any]
+    json.removeValue(forKey: "lowPower")
+    #expect(try JSONDecoder().decode(PowerRequest.self, from: JSONSerialization.data(withJSONObject: json)).lowPower == nil)
+}

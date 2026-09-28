@@ -27,7 +27,11 @@ public final class PowerController {
     var deadline: Date?
     public var lastError: String?
     var timer: Timer?
-    public var active: Bool { mode != .off || recovery.lidOwned }
+    /// MagSafe LED control follows the app's setting. It is cosmetic, so it is never journaled:
+    /// every stop simply hands the LED back to macOS.
+    public private(set) var ledControl = false
+    var ledWritten: MagSafeLED?
+    public var active: Bool { mode != .off || recovery.lidOwned || ledControl }
     public convenience init() {
         self.init(hardware: BatteryHardware(), recoveryURL: URL(fileURLWithPath: PowerIdentity.journalPath), execute: command)
     }
@@ -84,8 +88,29 @@ public final class PowerController {
         if disabled { _ = try execute("/usr/bin/pmset", ["disablesleep","0"]) }
         recovery.lidOwned = false; deadline = nil; try save()
     }
+    func setLED(_ on: Bool) { ledControl = on; updateLED() }
+    /// Green while the cable holds the level, amber while charging, blinking while running from
+    /// the battery with the cable in. Re-applied on every tick because macOS writes the key too.
+    public func updateLED() {
+        guard ledControl else { restoreLED(); return }
+        let state = hardware.snapshot(), flow = hardware.batteryFlow()
+        let desired = MagSafeLED.desired(pluggedIn: state.pluggedIn, charging: flow?.charging ?? false, amperage: flow?.amperage)
+        if desired == .system {
+            restoreLED(keepControl: true); return
+        }
+        guard hardware.readLED() != desired || ledWritten != desired else { return }
+        do { try hardware.writeLED(desired); ledWritten = desired }
+        catch { lastError = error.localizedDescription; ledControl = false }
+    }
+    func restoreLED(keepControl: Bool = false) {
+        if !keepControl { ledControl = false }
+        guard ledWritten != nil else { return }
+        ledWritten = nil
+        try? hardware.writeLED(.system)
+    }
     public func restoreAll() throws {
         guard !recoveryUnavailable else { throw PowerFailure("Cannot restore an unreadable recovery journal") }
+        restoreLED()
         var failure: Error?
         do { try restoreBattery() } catch { failure = error }
         do { try restoreLid() } catch { failure = error }
@@ -101,6 +126,7 @@ public final class PowerController {
         if mode == .off && !recovery.original.isEmpty {
             do { try restoreBattery() } catch { lastError = error.localizedDescription }
         }
+        updateLED()
         do {
             if Date().timeIntervalSince(lastHeartbeat) > 65 { try restoreAll(); throw PowerFailure("Controls stopped because MenuSprite disconnected") }
             let state = hardware.snapshot()
@@ -108,9 +134,18 @@ public final class PowerController {
             if recovery.lidOwned && (state.pluggedIn != true || (state.percent ?? 0) <= 20 || Date() >= (deadline ?? .distantPast)) { try restoreLid() }
             if mode != .off {
                 try noBatteryConflict()
-                guard state.chargeSupported, let percent = state.percent, let allow = state.chargingAllowed, state.pluggedIn != nil else { throw PowerFailure("Battery state unavailable; restoring controls") }
+                guard let percent = state.percent, state.pluggedIn != nil else { throw PowerFailure("Battery state unavailable; restoring controls") }
                 if state.pluggedIn != true { try restoreBattery() }
-                else if let decision = BatteryPolicy.decide(mode:mode,band:band,percent:percent,chargingAllowed:allow) {
+                else if !state.chargeSupported {
+                    // Adapter-only firmware can run the Mac from its battery but
+                    // cannot inhibit charging, so a discharge is a one-shot that
+                    // hands control back at the target rather than a held band.
+                    guard mode == .discharge else { throw PowerFailure("This firmware cannot hold a charge limit") }
+                    if percent > band.upper { try write(hardware.adapterValues(allow:false)) }
+                    else { try restoreBattery() }
+                }
+                else if let allow = state.chargingAllowed,
+                        let decision = BatteryPolicy.decide(mode:mode,band:band,percent:percent,chargingAllowed:allow) {
                     if decision.adapter { try write(hardware.adapterValues(allow:true)) }
                     try write(hardware.chargeValues(allow:decision.charge))
                     if !decision.adapter { try write(hardware.adapterValues(allow:false)) }
@@ -128,6 +163,15 @@ public final class PowerController {
             if timer == nil { timer = Timer.scheduledTimer(withTimeInterval:15,repeats:true) { [weak self] _ in self?.tick() }; timer?.tolerance = 2 }
         } else { timer?.invalidate(); timer = nil }
     }
+/// macOS's energy mode, from `pmset -g`: 0 automatic, 1 Low Power Mode, 2 High Power Mode.
+private func powerMode() -> Int? {
+    guard let text = try? execute("/usr/bin/pmset", ["-g"]) else { return nil }
+    for line in text.split(separator:"\n") {
+        let fields = line.split(whereSeparator: { $0.isWhitespace })
+        if fields.first == "powermode", fields.count == 2 { return Int(fields[1]) }
+    }
+    return nil
+}
 private func sleepDisabled() -> Bool? {
     guard let text = try? execute("/usr/bin/pmset", ["-g"]) else { return nil }
     for line in text.split(separator:"\n") {
@@ -140,24 +184,47 @@ private func sleepDisabled() -> Bool? {
     public func snapshot() -> PowerSnapshot {
         var result = hardware.snapshot(); result.mode = mode; result.band = band
         result.lidActive = recovery.lidOwned; result.sleepDisabled = sleepDisabled(); result.helperConnected = true; result.recoveryPending = recoveryUnavailable || (!recovery.original.isEmpty && mode == .off); result.error = lastError
+        result.systemLimit = geteuid() == 0 ? SystemChargeLimit.stored() : nil
+        result.ledControl = ledControl; result.led = hardware.readLED()
         return result
     }
     public func handle(_ request: PowerRequest) -> PowerSnapshot {
         do {
             guard !recoveryUnavailable || request.action == .status else { throw PowerFailure("Controls blocked by unreadable recovery journal") }
+            // Any request is proof the app is alive; the LED setting rides along on every one.
+            lastHeartbeat = Date()
+            if let led = request.led, led != ledControl || led { setLED(led) }
             switch request.action {
             case .status: break
             case .heartbeat: lastHeartbeat = Date()
             case .stopAll: try restoreAll()
             case .stopBattery: try restoreBattery()
             case .stopLid: try restoreLid()
+            case .chargeLimit:
+                // macOS enforces this itself, through sleep and after MenuSprite quits, so
+                // nothing is journaled and no timer runs for it.
+                guard let limit = request.limit else { throw PowerFailure("No charge limit given") }
+                try SystemChargeLimit.write(limit)
+                lastError = nil
+            case .lowPower:
+                // Needs root: macOS's own Low Power Mode switch accepts only Apple's entitled clients.
+                // Both power sources are set, so "normal" is the automatic mode on battery and adapter.
+                guard let on = request.lowPower else { throw PowerFailure("No Low Power Mode state given") }
+                _ = try execute("/usr/bin/pmset", ["-a", "powermode", on ? "1" : "0"])
+                guard powerMode() == (on ? 1 : 0) else { throw PowerFailure("macOS did not confirm Low Power Mode \(on ? "on" : "off")") }
+                lastError = nil
             case .battery:
                 guard request.band.valid, request.mode != .off else { throw PowerFailure("Invalid charge band") }
                 guard recovery.original.isEmpty || mode != .off else { throw PowerFailure("Recover previous control changes before starting") }
                 try noBatteryConflict()
                 let s = hardware.snapshot()
-                guard s.chargeSupported, s.pluggedIn == true else { throw PowerFailure("Connect power and use supported firmware before starting") }
-                guard request.mode != .discharge || s.dischargeSupported else { throw PowerFailure("Forced discharge is unavailable on this firmware") }
+                guard s.pluggedIn == true else { throw PowerFailure("Connect power before starting a battery control") }
+                if request.mode == .discharge {
+                    guard s.dischargeSupported else { throw PowerFailure("Forced discharge is unavailable on this firmware") }
+                    guard (s.percent ?? 0) > request.band.upper else { throw PowerFailure("The battery is already at or below that level") }
+                } else {
+                    guard s.chargeSupported else { throw PowerFailure("This firmware publishes no writable charge control, so a charge limit cannot be held") }
+                }
                 band = request.band; mode = request.mode; lastError = nil; lastHeartbeat = Date(); tick()
             case .startLid:
                 guard recovery.original.isEmpty || mode != .off else { throw PowerFailure("Battery recovery must finish first") }

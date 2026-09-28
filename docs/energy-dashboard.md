@@ -1,5 +1,39 @@
 # Battery & Power dashboard — 10 September 2026
 
+## AlDente look — 28 September 2026
+
+Prerak asked for the dashboard to look like AlDente Pro's (screenshots side by side; the
+calibration step row is AlDente's calibration mode and is not reproduced).
+
+- Header: glass capsules — **Limit:** bold with the value regular on the left, Discharge ⊖ and
+  Top Up ⊕ (SF circle symbols) pushed right, a round grid button.
+- Battery bar: 30 pt green capsule, percentage and state icons inside (plug; + charging, − draining;
+  sailboat while sailing; pause while a discharge is held; ↑ during Top Up), a white handle at the
+  limit (at 100% when no limit is on, ready to drag). The status sentence and "Drag the line…" hint
+  are gone from the page; the status is the bar's tooltip and accessibility label, and a line appears
+  only for a problem (`power.notice` / `batteryControlReason`).
+- Power flow: a proportional Sankey where **every node is exactly as tall as the ribbons meeting it**
+  (revised the same day after Prerak's screenshot showed the adapter wave entering a much taller Mac).
+  Charging: adapter → battery (above the Mac) and → Mac. Discharging on the cable: adapter and battery
+  stacked on the left, both merging into the Mac. One source only: that source → Mac; an idle battery
+  is not drawn. Mac → **System** (cpu icon, `sensor.PSTR`) and **Other** (… icon, measured residual).
+  ~1.4 pt per watt as in AlDente, raised so the Mac is at least 44 pt, capped at 124 pt; the diagram's
+  height follows the content (10 pt steps). Watts on the ribbons; a thin ribbon's label sits under it.
+  **AlDente splits the Mac three ways (CPU, port, other); MenuSprite has no CPU-only or per-port power
+  sensor, so it splits in two.** No sailing shading on the bar (the sailboat icon says it).
+  Battery flows under 0.6 W (~50 mA, PowerStore's charging/draining dead band) count as idle: the gauge
+  reads a few tens of mA while macOS holds the charge (0.38 W seen at a 70% hold on adapter power).
+- Apps: "Apps Using Significant Energy" card listing apps at ≥ 0.1 W CPU energy
+  (`EnergyDocumentView.significantWatts`), with the quit buttons; empty → "No Apps Using Significant
+  Energy" capsule. The separate "Highest app CPU energy" row is gone. Charts follow, restyled.
+- `MenuSprite --energy-render <dir> [--wait s]` renders dark and light PNGs off-screen on throwaway
+  preferences with charge control off (never writes a limit; handle drawn at a preview 80%), plus
+  `flow-{charging,draining,battery,adapter}.png` from made-up readings (`EnergyDocumentView.previewFlow`).
+
+
+The `Apps & processes · CPU power` rows carry a trailing quit button; see
+[quitting an app from a process panel](quit-processes.md).
+
 Implemented locally in MenuSprite **0.5.0 (9)**. Click the existing **PWR**
 menu-bar readout, or choose **Battery & Power** from MenuSprite’s menu (Command-B).
 The screenshot supplied by Prerak and AlDente’s documented Power Flow behavior

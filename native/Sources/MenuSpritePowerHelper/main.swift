@@ -1,6 +1,7 @@
 import Foundation
 import IOKit
 import IOKit.pwr_mgt
+import IOKit.ps
 import PowerControl
 
 private final class Endpoint: NSObject, PowerHelperProtocol {
@@ -63,6 +64,10 @@ powerConnection = IORegisterForSystemPower(nil,&port,{ _, _, message, argument i
 },&notifier)
 guard powerConnection != 0, port != nil else { fputs("System sleep notification registration failed; controls unavailable.\n",stderr); exit(1) }
 if let port, let source = IONotificationPortGetRunLoopSource(port)?.takeUnretainedValue() { CFRunLoopAddSource(CFRunLoopGetMain(),source,.defaultMode) }
+// Plug, unplug and charge-state changes move the MagSafe LED at once instead of on the next tick.
+if let source = IOPSNotificationCreateRunLoopSource({ _ in
+    DispatchQueue.main.async { if server.controller.ledControl { server.controller.updateLED() } }
+}, nil)?.takeRetainedValue() { CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode) }
 let idleTimer = Timer.scheduledTimer(withTimeInterval:120,repeats:true) { _ in
     if !server.hasOwner && !server.controller.active && !server.controller.needsRecovery { exit(0) }
 }

@@ -14,6 +14,8 @@ final class EnergyDocumentView: NSView {
     var optionsExpanded = false
     var chartVisibility = [true, true, true]
     var showFlow = true
+    /// Render harness only: where the limit handle sits when no limit is on.
+    var previewLimit: Int?
     private var motionActive = false
     private var motionTimer: Timer?
     private var cachedFlow: EnergyFlow?
@@ -22,45 +24,66 @@ final class EnergyDocumentView: NSView {
     private var cachedFlowDark = false
     private var renderingFlowCache = false
     private var accessibilityRows: [NSAccessibilityElement] = []
-    private let violet = NSColor(red: 0.66, green: 0.40, blue: 0.96, alpha: 1)
-    private let blue = NSColor(red: 0.39, green: 0.62, blue: 0.97, alpha: 1)
-    private let green = NSColor(red: 0.48, green: 0.76, blue: 0.57, alpha: 1)
+    private let violet = NSColor(red: 0.62, green: 0.48, blue: 0.98, alpha: 1)
+    private let blue = NSColor(red: 0.39, green: 0.58, blue: 0.97, alpha: 1)
+    private let green = NSColor(red: 0.42, green: 0.79, blue: 0.52, alpha: 1)
+    private let amber = NSColor(red: 0.80, green: 0.66, blue: 0.38, alpha: 1)
+    private let teal = NSColor(red: 0.38, green: 0.74, blue: 0.68, alpha: 1)
+    private let barGreen = NSColor(red: 0.15, green: 0.57, blue: 0.30, alpha: 1)
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { true }
     private var dark: Bool { effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
     private var muted: NSColor { NSColor(calibratedWhite: dark ? 0.69 : 0.39, alpha: 1) }
     private var foreground: NSColor { NSColor(calibratedWhite: dark ? 0.93 : 0.12, alpha: 1) }
-    var flow: EnergyFlow { EnergyFlow(readings: monitoring.readings, maximumAge: maximumAge) }
-    var limitOrigin: CGFloat { 100 }
-    var optionsOrigin: CGFloat { limitOrigin + (limitExpanded ? 158 : 0) }
-    var flowRect: NSRect { NSRect(x: 12, y: optionsOrigin + (optionsExpanded ? 104 : 0), width: bounds.width - 24, height: showFlow ? 236 : 0) }
-    private var energyRow: NSRect { NSRect(x: 12, y: flowRect.maxY + (showFlow ? 12 : 0), width: bounds.width - 24, height: 55) }
+    /// Glass: every surface is a faint wash with a hairline edge, as in AlDente.
+    private var surface: NSColor { NSColor(calibratedWhite: dark ? 1 : 0, alpha: dark ? 0.065 : 0.045) }
+    private var hairline: NSColor { NSColor(calibratedWhite: dark ? 1 : 0, alpha: dark ? 0.13 : 0.10) }
+    /// Render harness only: a made-up flow to lay out instead of the live readings.
+    var previewFlow: EnergyFlow?
+    var flow: EnergyFlow { previewFlow ?? EnergyFlow(readings: monitoring.readings, maximumAge: maximumAge) }
+    /// Something worth reading (a failed write, another battery app). Routine state is the bar's icons.
+    private var issue: String? { power.notice ?? power.batteryControlReason }
+    var limitOrigin: CGFloat { 48 + (issue == nil ? 0 : 36) }
+    var optionsOrigin: CGFloat { limitOrigin + (limitExpanded ? 186 : 0) }
+    var flowRect: NSRect { NSRect(x: 0, y: optionsOrigin + (optionsExpanded ? 104 : 0), width: bounds.width, height: showFlow ? flowLayout(flow, top: 0).height : 0) }
+    private var appsTop: CGFloat { flowRect.maxY + (showFlow ? 8 : 0) }
+    private var appsRect: NSRect {
+        let rows = processRows
+        let height: CGFloat = rows.isEmpty ? 50 : 42 + rows.reduce(0) { $0 + $1.height } + 26 + (processes.notice == nil ? 0 : 17)
+        return NSRect(x: 12, y: appsTop, width: bounds.width - 24, height: height)
+    }
     private var chartRects: [NSRect] {
-        var y = energyRow.maxY + 12
+        var y = appsRect.maxY + 12
         return chartVisibility.map { visible in
             let rect = NSRect(x: 12, y: y, width: bounds.width - 24, height: visible ? 148 : 0)
             if visible { y += 160 }; return rect
         }
     }
-    private var listRect: NSRect {
-        let y = max(energyRow.maxY + 12, chartRects.map(\.maxY).max() ?? 0)
-        return NSRect(x: 12, y: y, width: bounds.width - 24, height: 83 + max(36, processes.ranked.prefix(30).reduce(CGFloat(0)) { $0 + ($1.consumer.presentation.subtitle == nil ? 26 : 40) }))
-    }
-    private var processRows: [(row: ProcessConsumerRate, y: CGFloat, height: CGFloat)] {
-        var y = listRect.minY + 62
-        return processes.ranked.prefix(30).map { row in
-            let height: CGFloat = row.consumer.presentation.subtitle == nil ? 26 : 40
-            defer { y += height }
-            return (row, y, height)
+    /// macOS's battery menu lists "Apps Using Significant Energy"; this is the CPU-energy
+    /// equivalent: an app shows once it draws at least this much.
+    static let significantWatts = 0.1
+    private var significantRows: [(row: ProcessConsumerRate, depth: Int)] {
+        var keep = false
+        return processes.visibleRows(limit: 30).filter { item in
+            if item.depth == 0 { keep = item.row.value >= Self.significantWatts }
+            return keep
         }
     }
-    var requiredHeight: CGFloat { enabled ? listRect.maxY + 18 : 155 }
+    var processRowLayout: [(row: ProcessConsumerRate, y: CGFloat, height: CGFloat)] { processRows.map { ($0.row, $0.y, $0.height) } }
+    private var processRows: [(row: ProcessConsumerRate, y: CGFloat, height: CGFloat, indent: CGFloat)] {
+        var y = appsTop + 42
+        return significantRows.map { item in
+            let height: CGFloat = item.row.consumer.presentation.subtitle == nil ? 26 : 40
+            defer { y += height }
+            return (item.row, y, height, CGFloat(item.depth) * 18)
+        }
+    }
+    var requiredHeight: CGFloat { enabled ? max(appsRect.maxY, chartRects.map(\.maxY).max() ?? 0) + 18 : 155 }
     func visibleIconConsumers(in visible: NSRect) -> Set<String> {
         guard enabled else { return [] }
         var ids: Set<String> = []
-        if visible.intersects(energyRow), let top = processes.ranked.first { ids.insert(top.id) }
         for item in processRows {
-            if visible.intersects(NSRect(x: 12, y: item.y, width: listRect.width, height: item.height)) { ids.insert(item.row.id) }
+            if visible.intersects(NSRect(x: 12, y: item.y, width: appsRect.width, height: item.height)) { ids.insert(item.row.id) }
         }
         return ids
     }
@@ -77,20 +100,27 @@ final class EnergyDocumentView: NSView {
         paragraph.lineBreakMode = wrap ? .byWordWrapping : .byTruncatingTail
         (value as NSString).draw(in: rect, withAttributes: [.font: digits ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight) : NSFont.systemFont(ofSize: size, weight: weight), .foregroundColor: color ?? foreground, .paragraphStyle: paragraph])
     }
-    private func card(_ rect: NSRect, radius: CGFloat = 15) {
-        NSColor(calibratedWhite: dark ? 0.18 : 0.95, alpha: 1).setFill()
-        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius); path.fill()
-        NSColor(calibratedWhite: dark ? 0.29 : 0.86, alpha: 1).setStroke(); path.lineWidth = 0.6; path.stroke()
+    private func card(_ rect: NSRect, radius: CGFloat = 18) {
+        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        surface.setFill(); path.fill()
+        hairline.setStroke(); path.lineWidth = 1; path.stroke()
     }
-    private func symbol(_ name: String, in rect: NSRect, color: NSColor? = nil) {
-        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return }
-        let tinted = NSImage(size: rect.size, flipped: true) { r in
+    /// An SF Symbol fitted (not stretched) into `rect` and tinted.
+    private func symbol(_ name: String, in rect: NSRect, color: NSColor? = nil, weight: NSFont.Weight = .semibold) {
+        guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return }
+        let image = base.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: rect.height * 0.85, weight: weight)) ?? base
+        let size = image.size; guard size.width > 0, size.height > 0 else { return }
+        let scale = min(rect.width / size.width, rect.height / size.height)
+        let fitted = NSRect(x: rect.midX - size.width * scale / 2, y: rect.midY - size.height * scale / 2, width: size.width * scale, height: size.height * scale)
+        let tint = color ?? muted
+        let tinted = NSImage(size: fitted.size, flipped: true) { r in
             image.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-            (color ?? self.muted).setFill(); r.fill(using: .sourceAtop); return true
+            tint.setFill(); r.fill(using: .sourceAtop); return true
         }
-        tinted.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        tinted.draw(in: fitted, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
     private var controlStatus: String {
+        if power.usesSystemLimit { return power.limitStatus }
         if power.snapshot.recoveryPending { return "Battery control needs recovery" }
         if !power.snapshot.helperConnected && power.snapshot.mode != .off { return "Connection lost · recovery pending" }
         switch power.snapshot.mode {
@@ -100,47 +130,129 @@ final class EnergyDocumentView: NSView {
         case .discharge: return "Discharging to \(power.snapshot.band.upper)%"
         }
     }
+    // MARK: Battery bar and its draggable limit handle
+
+    var batteryBar: NSRect { NSRect(x: 14, y: 8, width: bounds.width - 28, height: 30) }
+    /// The value under the pointer while the handle is being dragged; applied on release.
+    private(set) var draggingLimit: Int?
+    private var limitDraggable: Bool { enabled && power.usesSystemLimit && power.canSetLimit }
+    /// Where the handle sits: the drag in progress, else the saved limit; with no limit it rests at
+    /// 100%, as AlDente's does, ready to be dragged down.
+    private var markerValue: Int? {
+        if let draggingLimit { return draggingLimit }
+        if power.usesSystemLimit { return power.saverEnabled ? power.band.upper : (previewLimit ?? (limitDraggable ? 100 : nil)) }
+        return power.snapshot.controlCeiling ?? power.band.upper
+    }
+    func limit(atX x: CGFloat) -> Int {
+        let bar = batteryBar
+        let raw = Int(((x - bar.minX) / bar.width * 100).rounded())
+        return min(100, max(21, raw))
+    }
+    /// What the pack is doing, as icons after the percentage: plug (on the cable) with + charging
+    /// or − draining, a sailboat while sailing, pause while a discharge is held, ↑ during Top Up.
+    private var stateSymbols: [(String, String?)] {
+        guard power.snapshot.pluggedIn == true else { return [] }
+        let charging = (power.snapshot.chargeCurrent ?? 0) > 0 || (power.batteryAmperage ?? 0) > 50
+        let draining = power.usesSystemLimit ? power.isDraining : power.snapshot.mode == .discharge
+        var result: [(String, String?)] = [("powerplug.fill", charging ? "plus" : draining ? "minus" : nil)]
+        if power.usesSystemLimit && power.isSailing { result.append(("sailboat.fill", nil)) }
+        if power.holdLevel != nil { result.append(("pause.fill", nil)) }
+        if power.topUpActive { result.append(("arrow.up.to.line", nil)) }
+        return result
+    }
+    private func drawBatteryBar(_ current: EnergyFlow) {
+        let bar = batteryBar, radius = bar.height / 2
+        let track = NSBezierPath(roundedRect: bar, xRadius: radius, yRadius: radius)
+        surface.setFill(); track.fill()
+        var filledTo = bar.minX
+        if let charge = current.charge {
+            let width = bar.width * CGFloat(charge) / 100
+            filledTo = bar.minX + width
+            let color: NSColor = charge <= 10 && power.snapshot.pluggedIn != true ? .systemRed : barGreen
+            NSGraphicsContext.saveGraphicsState(); track.addClip()
+            let body = NSBezierPath(roundedRect: NSRect(x: bar.minX, y: bar.minY, width: max(bar.height, width), height: bar.height), xRadius: radius, yRadius: radius)
+            color.setFill(); body.fill()
+            NSColor(calibratedWhite: 1, alpha: 0.16).setStroke(); body.lineWidth = 1; body.stroke()
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        hairline.setStroke(); track.lineWidth = 1; track.stroke()
+        let label = current.charge.map { String(format: "%.0f%%", $0) } ?? "—"
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
+        let labelWidth = ceil((label as NSString).size(withAttributes: [.font: font]).width) + 2
+        let x = bar.minX + 18
+        text(label, NSRect(x: x, y: bar.midY - 10, width: labelWidth, height: 20), size: 15, weight: .semibold,
+             color: x + labelWidth <= filledTo ? .white : foreground, digits: true)
+        var ix = x + labelWidth + 24
+        for (name, overlay) in stateSymbols {
+            let tint: NSColor = ix + 16 <= filledTo ? .white : foreground
+            symbol(name, in: NSRect(x: ix, y: bar.midY - 8, width: 16, height: 16), color: tint)
+            ix += 15
+            if let overlay { symbol(overlay, in: NSRect(x: ix, y: bar.midY - 6, width: 10, height: 10), color: tint, weight: .heavy); ix += 10 }
+            ix += 14
+        }
+        drawLimitMarker(in: bar)
+    }
+    private func drawLimitMarker(in bar: NSRect) {
+        guard let value = markerValue else { return }
+        let x = min(bar.maxX - 5, max(bar.minX + 5, bar.minX + bar.width * CGFloat(value) / 100))
+        // AlDente's handle: a light capsule standing proud of the bar.
+        let live = limitDraggable || previewLimit != nil
+        let handle = NSRect(x: x - 3, y: bar.minY - 5, width: 6, height: bar.height + 10)
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow(); shadow.shadowBlurRadius = 3; shadow.shadowColor = NSColor(calibratedWhite: 0, alpha: 0.45); shadow.set()
+        (live ? NSColor(calibratedWhite: dark ? 0.94 : 0.30, alpha: 1) : muted).setFill()
+        NSBezierPath(roundedRect: handle, xRadius: 3, yRadius: 3).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        if let draggingLimit {
+            let label = "\(draggingLimit)%", width: CGFloat = 46
+            let lx = x - width - 8 >= bar.minX + 4 ? x - width - 8 : x + 8
+            NSColor.controlAccentColor.setFill()
+            NSBezierPath(roundedRect: NSRect(x: lx, y: bar.minY + 5, width: width, height: 20), xRadius: 10, yRadius: 10).fill()
+            text(label, NSRect(x: lx, y: bar.minY + 6, width: width, height: 18), size: 12, weight: .bold, color: .white, alignment: .center, digits: true)
+        }
+    }
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if limitDraggable { addCursorRect(batteryBar.insetBy(dx: 0, dy: -6), cursor: .resizeLeftRight) }
+    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard limitDraggable, batteryBar.insetBy(dx: -6, dy: -6).contains(point) else { super.mouseDown(with: event); return }
+        draggingLimit = limit(atX: point.x); needsDisplay = true
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard draggingLimit != nil else { super.mouseDragged(with: event); return }
+        draggingLimit = limit(atX: convert(event.locationInWindow, from: nil).x); needsDisplay = true
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard let value = draggingLimit else { super.mouseUp(with: event); return }
+        draggingLimit = nil; needsDisplay = true
+        power.setLimit(value)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedWhite: dark ? 0.11 : 0.985, alpha: 1).setFill(); bounds.fill()
+        NSColor(calibratedWhite: dark ? 0.11 : 0.985, alpha: 1).setFill(); dirtyRect.fill()
         guard enabled else {
             text("This power sprite is paused.", NSRect(x: 24, y: 20, width: bounds.width - 48, height: 30), weight: .semibold)
             text("Use Customize to enable it. Charts and process collection are paused.", NSRect(x: 24, y: 57, width: bounds.width - 48, height: 65), color: muted, wrap: true)
             return
         }
         let current = flow
-        let bar = NSRect(x: 14, y: 2, width: bounds.width - 28, height: 29)
-        card(bar, radius: 14)
-        if let charge = current.charge {
-            blue.withAlphaComponent(dark ? 0.48 : 0.23).setFill()
-            NSBezierPath(roundedRect: NSRect(x: bar.minX, y: bar.minY, width: max(0.01, bar.width * charge / 100), height: bar.height), xRadius: 14, yRadius: 14).fill()
+        if dirtyRect.minY < limitOrigin {
+            drawBatteryBar(current)
+            if let issue {
+                symbol("exclamationmark.triangle.fill", in: NSRect(x: 16, y: 50, width: 13, height: 13), color: .systemOrange)
+                text(issue, NSRect(x: 35, y: 47, width: bounds.width - 51, height: 32), size: 10.5, weight: .medium, color: muted, wrap: true)
+            }
         }
-        let marker = bar.minX + bar.width * Double(power.snapshot.controlCeiling ?? power.band.upper) / 100
-        let mark = NSBezierPath(); mark.move(to: .init(x: marker, y: bar.minY - 2)); mark.line(to: .init(x: marker, y: bar.maxY + 2))
-        mark.lineWidth = 2; mark.setLineDash([3, 3], count: 2, phase: 0); muted.setStroke(); mark.stroke()
-        text(current.charge.map { String(format: "%.0f%%", $0) } ?? "—", NSRect(x: 25, y: 5, width: 70, height: 22), size: 17, weight: .semibold, digits: true)
-        text(current.sourceState ?? "Power source unavailable", NSRect(x: 97, y: 8, width: bar.width - 100, height: 17), size: 11, weight: .medium)
-        text(controlStatus, NSRect(x: 16, y: 42, width: bounds.width - 32, height: 19), size: 11, weight: .semibold, color: power.snapshot.mode == .off ? muted : green)
-        let detail = power.notice ?? power.batteryControlReason ?? "Limits stop on sleep, unplug or app exit."
-        text(detail, NSRect(x: 16, y: 63, width: bounds.width - 32, height: 32), size: 10, color: muted, wrap: true)
-        if limitExpanded { card(NSRect(x: 12, y: limitOrigin, width: bounds.width - 24, height: 146)) }
+        if limitExpanded { card(NSRect(x: 12, y: limitOrigin, width: bounds.width - 24, height: 174)) }
         if optionsExpanded { card(NSRect(x: 12, y: optionsOrigin, width: bounds.width - 24, height: 92)) }
         for case let button as NSButton in subviews where button.tag == 900 && !button.isHidden {
-            NSColor(calibratedWhite: dark ? 0.25 : 0.88, alpha: 1).setFill()
-            NSBezierPath(roundedRect: button.frame, xRadius: 9, yRadius: 9).fill()
+            card(button.frame, radius: button.frame.height / 2)
         }
         if showFlow && flowRect.intersects(dirtyRect) { drawCachedFlow(current) }
-        if energyRow.intersects(dirtyRect) {
-        card(energyRow)
-        text("Highest app CPU energy", NSRect(x: 25, y: energyRow.minY + 10, width: 192, height: 17), size: 11, weight: .semibold)
-        text("Measured across accessible app processes", NSRect(x: 25, y: energyRow.minY + 30, width: 220, height: 15), size: 9, color: muted)
-        if let top = processes.ranked.first, top.value > 0 {
-            let title = top.consumer.presentation.title
-            let x = bounds.width - 171
-            if let path = top.consumer.presentation.iconBundlePath, let icon = processes.icons[path] { icon.draw(in: NSRect(x: x, y: energyRow.minY + 13, width: 23, height: 23), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil) }
-            text(title, NSRect(x: x + 30, y: energyRow.minY + 10, width: 113, height: 18), size: 11, weight: .semibold, alignment: .right)
-            text((top.missingCount > 0 ? "≥ " : "") + ProcessPanelKind.power.formatted(top.value), NSRect(x: x + 30, y: energyRow.minY + 30, width: 113, height: 17), size: 10, color: muted, alignment: .right, digits: true)
-        } else { text(processes.loading || !processes.hasInterval ? "Sampling…" : "No comparable activity", NSRect(x: bounds.width - 150, y: energyRow.minY + 18, width: 120, height: 20), size: 10, color: muted, alignment: .right) }
-        }
+        drawApps(dirtyRect)
         let values = [current.system, current.temperature, current.charge]
         let titles = ["Power Consumption", "Battery Temperature", "Battery Level"]
         let units = ["W", "°C", "%"]
@@ -148,7 +260,7 @@ final class EnergyDocumentView: NSView {
             let rect = chartRects[index]
             guard rect.intersects(dirtyRect) else { continue }
             card(rect)
-            text(titles[index], NSRect(x: 25, y: rect.minY + 12, width: 224, height: 24), size: 14, weight: .semibold)
+            text(titles[index], NSRect(x: 26, y: rect.minY + 12, width: 224, height: 24), size: 14, weight: .semibold)
             let value = values[index].map { String(format: index == 2 ? "%.0f %@" : "%.1f %@", $0, units[index]) } ?? "—"
             text(value, NSRect(x: bounds.width - 141, y: rect.minY + 8, width: 116, height: 31), size: 22, weight: .bold, alignment: .right, digits: true)
             drawChartPlot(index)
@@ -156,12 +268,11 @@ final class EnergyDocumentView: NSView {
             let points = monitoring.history[chartIDs[index]] ?? []
             let latest = points.last.map { Int(Date().timeIntervalSince($0.time)) } ?? -1
             let time = latest >= 0 ? "\(points.count) samples · latest \(latest)s ago" : "Waiting for samples"
-            text(time, NSRect(x: 25, y: rect.maxY - 20, width: 210, height: 14), size: 9, color: muted)
+            text(time, NSRect(x: 26, y: rect.maxY - 20, width: 210, height: 14), size: 9, color: muted)
             if values[index] == nil {
                 text("Reading unavailable", NSRect(x: bounds.width - 163, y: rect.maxY - 20, width: 136, height: 14), size: 9, color: muted, alignment: .right)
             }
         }
-        drawProcesses(dirtyRect)
     }
     private let chartIDs = ["sensor.PSTR", "battery.temperature", "battery.charge"]
     private func drawCachedFlow(_ current: EnergyFlow) {
@@ -183,50 +294,223 @@ final class EnergyDocumentView: NSView {
             }
         }
         cachedFlowImage?.draw(in: flowRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-        if motionTimer != nil { drawRibbons(current, origin: NSPoint(x: flowRect.minX, y: flowRect.minY + 40), motionOnly: true) }
+        if motionTimer != nil { drawMotion(flowLayout(current, top: flowRect.minY).ribbons) }
+    }
+    // MARK: Power flow (a proportional Sankey, laid out like AlDente's)
+
+    private struct FlowNode { let rect: NSRect; let symbol: String; let tint: NSColor; let caption: String? }
+    private struct FlowRibbon {
+        let start: NSPoint, end: NSPoint, width: CGFloat, from: NSColor, to: NSColor, value: Double?
+        var labelAt: CGFloat = 0.5
+        var live: Bool { (value ?? 0) > 0.05 }
+        func point(_ t: CGFloat) -> NSPoint {
+            let u = 1 - t, mid = (start.x + end.x) / 2
+            return NSPoint(x: u*u*u*start.x + 3*u*u*t*mid + 3*u*t*t*mid + t*t*t*end.x,
+                           y: u*u*u*start.y + 3*u*u*t*start.y + 3*u*t*t*end.y + t*t*t*end.y)
+        }
+    }
+    private struct FlowLayout { let nodes: [FlowNode]; let ribbons: [FlowRibbon]; let height: CGFloat }
+    /// AlDente's layout. Sources on the left, the Mac in the middle, where power goes on the right;
+    /// every node is exactly as tall as the ribbons meeting it, so each wave runs cleanly into its node.
+    /// - Charging: adapter → battery (above the Mac) and → Mac.
+    /// - Discharging on the cable: adapter and battery stacked on the left, both merging into the Mac.
+    /// - One source only: that source → Mac; an idle battery is not drawn.
+    /// Out of the Mac: System (`sensor.PSTR`) and Other, the measured residual (adapter − system −
+    /// battery: accessories, conversion losses). There is no CPU-only or per-port sensor, so the Mac
+    /// splits in two where AlDente splits in three.
+    private func flowLayout(_ f: EnergyFlow, top: CGFloat) -> FlowLayout {
+        let minX: CGFloat = 14, width = bounds.width - 28, maxX = minX + width
+        let adapter = max(0, f.adapter ?? 0), charging = f.batteryIn ?? 0, discharging = f.batteryOut ?? 0
+        // The pack's gauge reads a few tens of mA either way while macOS holds the charge (0.38 W seen at a
+        // 70% hold with the adapter carrying everything). Below ~50 mA — the dead band PowerStore uses
+        // for "charging" and "draining" — the battery is idle, not a source or a sink.
+        let idle = 0.6
+        let hasAdapter = adapter > 0.05, isCharging = hasAdapter && charging > idle, isDischarging = discharging > idle
+        let toMac = hasAdapter ? max(0, adapter - (isCharging ? charging : 0)) : 0
+        let macIn = toMac + (isDischarging ? discharging : 0)
+        let system = f.system ?? 0, other = f.difference ?? 0
+        // ~1.4 pt per watt like AlDente, raised so the Mac is never a sliver, never taller than 124 pt.
+        let largest = max(1, adapter, macIn, system + other, isCharging ? charging : 0)
+        let k = CGFloat(min(124 / largest, max(1.4, 44 / max(1, macIn))))
+        func thick(_ v: Double) -> CGFloat { v > 0.05 ? max(1.5, CGFloat(v) * k) : 0 }
+        let nodeWidth: CGFloat = 44, gap: CGFloat = 6, stack: CGFloat = 18, pad: CGFloat = 10
+        let hubX = (minX + width * 0.44).rounded(), outX = maxX - nodeWidth
+        let showAdapter = hasAdapter || (!isDischarging && f.adapter != nil && power.snapshot.pluggedIn != false)
+        let showSourceBattery = isDischarging || !showAdapter
+        let adapterHeight = max(30, thick(adapter))
+        let sourceBatteryHeight = max(30, thick(discharging))
+        let sinkBatteryHeight = max(30, thick(charging))
+        let macHeight = max(30, thick(macIn), thick(system) + thick(other))
+        let systemHeight = max(22, thick(system)), otherHeight = max(22, thick(other))
+        let left = (showAdapter ? adapterHeight : 0) + (showSourceBattery ? sourceBatteryHeight : 0) + (showAdapter && showSourceBattery ? stack : 0)
+        let middle = macHeight + (isCharging ? sinkBatteryHeight + stack : 0)
+        let right = systemHeight + 14 + otherHeight
+        let content = max(left, middle, right, 56)
+        let height = ((content + pad * 2) / 10).rounded(.up) * 10
+        let cy = top + height / 2
+        var nodes: [FlowNode] = [], ribbons: [FlowRibbon] = []
+        // Left column.
+        var y = cy - left / 2
+        var adapterRect: NSRect?, batterySource: NSRect?
+        if showAdapter {
+            let r = NSRect(x: minX, y: y, width: nodeWidth, height: adapterHeight); adapterRect = r; y += adapterHeight + stack
+            nodes.append(FlowNode(rect: r, symbol: "powerplug.fill", tint: foreground,
+                                  caption: adapterHeight >= 44 ? (f.adapter.map { $0 >= 10 ? String(format: "%.0f W", $0) : String(format: "%.1f W", $0) } ?? "—") : nil))
+        }
+        if showSourceBattery {
+            let r = NSRect(x: minX, y: y, width: nodeWidth, height: sourceBatteryHeight); batterySource = r
+            nodes.append(FlowNode(rect: r, symbol: batterySymbol(f.charge), tint: amber, caption: nil))
+        }
+        // Middle column: the battery above the Mac while it charges.
+        y = cy - middle / 2
+        var batterySink: NSRect?
+        if isCharging {
+            let r = NSRect(x: hubX, y: y, width: nodeWidth, height: sinkBatteryHeight); batterySink = r; y += sinkBatteryHeight + stack
+            nodes.append(FlowNode(rect: r, symbol: batterySymbol(f.charge), tint: green, caption: nil))
+        }
+        let mac = NSRect(x: hubX, y: y, width: nodeWidth, height: macHeight)
+        nodes.append(FlowNode(rect: mac, symbol: "laptopcomputer", tint: blue, caption: nil))
+        // Right column, centred on the Mac and kept inside the diagram.
+        let outTop = max(top + pad, min(mac.midY - right / 2, top + height - pad - right))
+        let systemRect = NSRect(x: outX, y: outTop, width: nodeWidth, height: systemHeight)
+        let otherRect = NSRect(x: outX, y: outTop + systemHeight + 14, width: nodeWidth, height: otherHeight)
+        nodes.append(FlowNode(rect: systemRect, symbol: "cpu", tint: violet, caption: nil))
+        nodes.append(FlowNode(rect: otherRect, symbol: "ellipsis", tint: foreground, caption: nil))
+        // Ribbons: each leaves its node stacked edge to edge and arrives the same way.
+        var macInY = mac.midY - thick(macIn) / 2
+        if let a = adapterRect {
+            var outY = a.midY - thick(adapter) / 2
+            if isCharging, let b = batterySink {
+                let t = thick(charging)
+                ribbons.append(FlowRibbon(start: NSPoint(x: a.maxX + gap, y: outY + t / 2), end: NSPoint(x: b.minX - gap, y: b.midY),
+                                          width: t, from: green, to: amber, value: charging))
+                outY += t
+            }
+            let t = thick(toMac)
+            ribbons.append(FlowRibbon(start: NSPoint(x: a.maxX + gap, y: outY + t / 2), end: NSPoint(x: mac.minX - gap, y: macInY + t / 2),
+                                      width: max(t, 1), from: green, to: blue, value: hasAdapter ? toMac : nil))
+            macInY += t
+        }
+        if let b = batterySource {
+            let t = thick(discharging)
+            ribbons.append(FlowRibbon(start: NSPoint(x: b.maxX + gap, y: b.midY), end: NSPoint(x: mac.minX - gap, y: macInY + t / 2),
+                                      width: max(t, 1), from: amber, to: blue, value: f.batteryOut))
+        }
+        let outStart = mac.midY - (thick(system) + thick(other)) / 2
+        ribbons.append(FlowRibbon(start: NSPoint(x: mac.maxX + gap, y: outStart + thick(system) / 2), end: NSPoint(x: systemRect.minX - gap, y: systemRect.midY),
+                                  width: max(thick(system), 1), from: blue, to: violet, value: f.system, labelAt: 0.42))
+        ribbons.append(FlowRibbon(start: NSPoint(x: mac.maxX + gap, y: outStart + thick(system) + thick(other) / 2), end: NSPoint(x: otherRect.minX - gap, y: otherRect.midY),
+                                  width: max(thick(other), 1), from: blue, to: teal, value: f.difference, labelAt: 0.5))
+        return FlowLayout(nodes: nodes, ribbons: ribbons, height: height)
+    }
+    private func batterySymbol(_ charge: Double?) -> String {
+        let c = charge ?? 100
+        return "battery.\(c >= 88 ? 100 : c >= 63 ? 75 : c >= 38 ? 50 : c >= 13 ? 25 : 0)percent"
+    }
+    private static func flowWatts(_ value: Double) -> String {
+        value >= 10 ? String(format: "%.1f W", value) : String(format: "%.2f W", value)
     }
     private func drawFlow(_ current: EnergyFlow) {
-        card(flowRect)
-        text("Power flow", NSRect(x: 25, y: flowRect.minY + 12, width: 170, height: 20), size: 13, weight: .semibold)
-        text("Live sensor readings", NSRect(x: bounds.width - 164, y: flowRect.minY + 15, width: 137, height: 16), size: 9, color: muted, alignment: .right)
-        let origin = NSPoint(x: flowRect.minX, y: flowRect.minY + 40), w = flowRect.width
-        drawRibbons(current, origin: origin)
-        func node(_ title: String, _ value: Double?, _ rect: NSRect, _ tint: NSColor) {
-            let r = rect.offsetBy(dx: origin.x, dy: origin.y)
-            tint.withAlphaComponent(dark ? 0.10 : 0.07).setFill(); NSBezierPath(roundedRect: r, xRadius: 9, yRadius: 9).fill()
-            text(title, NSRect(x: r.minX + 4, y: r.minY + 4, width: r.width - 8, height: 14), size: 9, color: muted, alignment: .center)
-            text(EnergyFlow.watts(value), NSRect(x: r.minX + 2, y: r.minY + 21, width: r.width - 4, height: 21), size: 15, weight: .semibold, alignment: .center, digits: true)
+        let layout = flowLayout(current, top: flowRect.minY)
+        drawRibbons(layout.ribbons)
+        for node in layout.nodes {
+            let r = node.rect, radius = min(10, r.height / 2)
+            let path = NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius)
+            NSColor(calibratedWhite: dark ? 0.16 : 0.97, alpha: 0.92).setFill(); path.fill()
+            hairline.setStroke(); path.lineWidth = 1; path.stroke()
+            let small = r.height < 30 || node.symbol == "cpu" || node.symbol == "ellipsis"
+            let icon: CGFloat = small ? 14 : 17
+            let iconY = node.caption == nil ? r.midY - icon / 2 : r.midY - icon / 2 - 8
+            symbol(node.symbol, in: NSRect(x: r.midX - icon / 2 - 4, y: iconY, width: icon + 8, height: icon), color: node.tint)
+            if let caption = node.caption {
+                text(caption, NSRect(x: r.minX, y: iconY + icon + 3, width: r.width, height: 15), size: 10.5, weight: .medium, color: muted, alignment: .center, digits: true)
+            }
         }
-        node("Adapter DC", current.adapter, NSRect(x: 8, y: 15, width: 74, height: 48), blue)
-        node("Battery out", current.batteryOut, NSRect(x: 8, y: 105, width: 74, height: 48), green)
-        let hub = NSRect(x: origin.x + 144, y: origin.y + 53, width: 58, height: 68)
-        NSColor(calibratedWhite: dark ? 0.23 : 0.90, alpha: 1).setFill(); NSBezierPath(roundedRect: hub, xRadius: 10, yRadius: 10).fill()
-        symbol("laptopcomputer", in: NSRect(x: hub.minX + 13, y: hub.minY + 10, width: 32, height: 28))
-        text("Mac", NSRect(x: hub.minX, y: hub.minY + 45, width: hub.width, height: 16), size: 10, weight: .medium, color: muted, alignment: .center)
-        node("System", current.system, NSRect(x: w - 100, y: 6, width: 90, height: 46), violet)
-        node("Battery in", current.batteryIn, NSRect(x: w - 100, y: 64, width: 90, height: 46), green)
-        node("Difference*", current.difference, NSRect(x: w - 100, y: 122, width: 90, height: 46), muted)
-        text(current.imbalance ? "Measurements do not balance; difference unavailable." : "*Input − system − battery. Includes unaccounted loads / losses.", NSRect(x: 25, y: flowRect.maxY - 24, width: bounds.width - 50, height: 19), size: 9, color: muted)
+        // Labels sit on their ribbons; one that would overlap an earlier label moves clear of it.
+        var placed: [NSRect] = []
+        for ribbon in layout.ribbons where ribbon.live {
+            let p = ribbon.point(ribbon.labelAt)
+            // A thin ribbon carries its label just under the line rather than across a neighbour.
+            var rect = NSRect(x: p.x - 36, y: ribbon.width < 12 ? p.y + ribbon.width / 2 + 1 : p.y - 8.5, width: 72, height: 17)
+            for other in placed where other.intersects(rect) { rect.origin.y = other.maxY + 1 }
+            placed.append(rect)
+            text(Self.flowWatts(ribbon.value ?? 0), rect, size: 12.5, weight: .bold, color: dark ? .white : foreground, alignment: .center, digits: true)
+        }
     }
-    private func drawProcesses(_ dirtyRect: NSRect) {
-        let r = listRect; guard r.intersects(dirtyRect) else { return }
-        card(r)
-        text("Apps & processes · CPU power", NSRect(x: 25, y: r.minY + 12, width: bounds.width - 50, height: 21), size: 13, weight: .semibold)
-        text("CPU energy estimate; excludes GPU, display and other components.", NSRect(x: 25, y: r.minY + 36, width: bounds.width - 50, height: 15), size: 9, color: muted)
-        for item in processRows {
-            let row = item.row, y = item.y, presentation = item.row.consumer.presentation
-            guard NSRect(x: 12, y: y, width: r.width, height: item.height).intersects(dirtyRect) else { continue }
-            if let path = presentation.iconBundlePath, let icon = processes.icons[path] { icon.draw(in: NSRect(x: 25, y: y, width: 17, height: 17), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil) }
-            text(presentation.title, NSRect(x: 51, y: y, width: bounds.width - 169, height: 19), size: 11)
-            if let subtitle = presentation.subtitle { text(subtitle, NSRect(x: 51, y: y + 18, width: bounds.width - 75, height: 16), size: 9, color: muted) }
-            text((row.missingCount > 0 ? "≥ " : "") + ProcessPanelKind.power.formatted(row.value), NSRect(x: bounds.width - 119, y: y, width: 93, height: 19), size: 11, color: muted, alignment: .right, digits: true)
+    private func ribbonPath(_ r: FlowRibbon) -> CGPath {
+        let path = CGMutablePath(), mid = (r.start.x + r.end.x) / 2, half = r.width / 2
+        path.move(to: NSPoint(x: r.start.x, y: r.start.y - half))
+        path.addCurve(to: NSPoint(x: r.end.x, y: r.end.y - half), control1: NSPoint(x: mid, y: r.start.y - half), control2: NSPoint(x: mid, y: r.end.y - half))
+        path.addLine(to: NSPoint(x: r.end.x, y: r.end.y + half))
+        path.addCurve(to: NSPoint(x: r.start.x, y: r.start.y + half), control1: NSPoint(x: mid, y: r.end.y + half), control2: NSPoint(x: mid, y: r.start.y + half))
+        path.closeSubpath(); return path
+    }
+    private func drawRibbons(_ ribbons: [FlowRibbon]) {
+        guard let context = NSGraphicsContext.current?.cgContext, let space = CGColorSpace(name: CGColorSpace.sRGB) else { return }
+        for r in ribbons {
+            let path = ribbonPath(r)
+            let alpha: CGFloat = r.value == nil ? 0.10 : (dark ? 0.46 : 0.34)
+            context.saveGState(); context.addPath(path); context.clip()
+            let colors = [r.from.withAlphaComponent(alpha).cgColor, r.to.withAlphaComponent(alpha).cgColor] as CFArray
+            if let gradient = CGGradient(colorsSpace: space, colors: colors, locations: [0, 1]) {
+                context.drawLinearGradient(gradient, start: r.start, end: r.end, options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+            }
+            context.restoreGState()
+            context.addPath(path)
+            context.setStrokeColor(r.to.withAlphaComponent(r.value == nil ? 0.12 : 0.40).cgColor)
+            context.setLineWidth(0.6); context.strokePath()
         }
-        if processes.ranked.isEmpty { text(processes.emptyMessage, NSRect(x: 25, y: r.minY + 62, width: r.width - 26, height: 38), size: 10, color: muted, wrap: true) }
-        text("Accessible processes and app helpers · updates every 5 seconds", NSRect(x: 25, y: r.maxY - 20, width: r.width - 26, height: 15), size: 9, color: muted)
+    }
+    private func drawMotion(_ ribbons: [FlowRibbon]) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let time = ProcessInfo.processInfo.systemUptime / 1.8
+        for (index, r) in ribbons.enumerated() where r.live {
+            for offset in [0.0, 0.5] {
+                let p = r.point(CGFloat((time + Double(index) * 0.13 + offset).truncatingRemainder(dividingBy: 1)))
+                context.setFillColor(r.to.withAlphaComponent(0.9).cgColor)
+                context.fillEllipse(in: NSRect(x: p.x - 1.8, y: p.y - 1.8, width: 3.6, height: 3.6))
+            }
+        }
+    }
+    // MARK: Apps
+
+    private var appsEmptyText: String {
+        if let notice = processes.notice { return notice }
+        if processes.ranked.isEmpty { return processes.loading ? "Measuring App Energy…" : processes.emptyMessage }
+        return "No Apps Using Significant Energy"
+    }
+    private func drawApps(_ dirtyRect: NSRect) {
+        let r = appsRect; guard r.intersects(dirtyRect) else { return }
+        let rows = processRows
+        guard !rows.isEmpty else {
+            card(r, radius: r.height / 2)
+            text(appsEmptyText, NSRect(x: r.minX + 18, y: r.midY - 10, width: r.width - 36, height: 20), size: 13, weight: .semibold, alignment: .center)
+            return
+        }
+        card(r, radius: 20)
+        text("Apps Using Significant Energy", NSRect(x: r.minX + 16, y: r.minY + 13, width: r.width - 120, height: 19), size: 13, weight: .semibold)
+        text("CPU energy", NSRect(x: r.maxX - 110, y: r.minY + 15, width: 94, height: 15), size: 10, color: muted, alignment: .right)
+        for item in rows {
+            let row = item.row, y = item.y, presentation = item.row.consumer.presentation, indent = item.indent
+            guard NSRect(x: 12, y: y, width: r.width, height: item.height).intersects(dirtyRect) else { continue }
+            if indent > 0 { NSColor.separatorColor.setFill(); NSRect(x: 35, y: y, width: 1, height: item.height).fill() }
+            if let path = presentation.iconBundlePath, let icon = processes.icons[path] { icon.draw(in: NSRect(x: 28 + indent, y: y, width: 18, height: 18), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil) }
+            text(presentation.title, NSRect(x: 54 + indent, y: y, width: bounds.width - 196 - indent, height: 19), size: 12, weight: .medium)
+            if let subtitle = presentation.subtitle { text(subtitle, NSRect(x: 54 + indent, y: y + 18, width: bounds.width - 102 - indent, height: 16), size: 9, color: muted) }
+            if ProcessQuitArming.shared.isArmed(row.id) {
+                text("quitting…", NSRect(x: bounds.width - 143, y: y + 1, width: 93, height: 17), size: 10, weight: .medium, color: .systemOrange, alignment: .right)
+            } else {
+                text((row.missingCount > 0 ? "≥ " : "") + ProcessPanelKind.power.formatted(row.value), NSRect(x: bounds.width - 143, y: y, width: 93, height: 19), size: 11, color: muted, alignment: .right, digits: true)
+            }
+        }
+        if let notice = processes.notice {
+            text(notice, NSRect(x: 28, y: r.maxY - 39, width: r.width - 32, height: 16), size: 10, weight: .semibold, color: blue)
+        }
+        text("CPU energy estimate; excludes GPU and display · updates every 5 s", NSRect(x: 28, y: r.maxY - 21, width: r.width - 32, height: 15), size: 9, color: muted)
     }
     private func graphRect(_ index: Int) -> NSRect { let r = chartRects[index]; return NSRect(x: 24, y: r.minY + 46, width: bounds.width - 48, height: 78) }
     private func reference(_ index: Int) -> Double? {
-        if index == 2 { return Double(power.snapshot.controlCeiling ?? power.band.upper) }
+        if index == 2 { return Double(power.activeCeiling ?? power.band.upper) }
         if index == 0 { let values = (monitoring.history[chartIDs[index]] ?? []).map(\.value); return values.isEmpty ? nil : values.reduce(0, +) / Double(values.count) }
         return nil
     }
@@ -240,45 +524,6 @@ final class EnergyDocumentView: NSView {
         NSColor.systemOrange.withAlphaComponent(0.75).setStroke(); line.stroke()
         let label = index == 0 ? String(format: "Avg %.1f W", value) : "\(power.snapshot.mode == .off ? "Target (off)" : power.snapshot.mode == .topUp ? "Top up" : "Limit") \(Int(value))%"
         if showLabel { text(label, NSRect(x: bounds.width - 160, y: rect.maxY - 20, width: 134, height: 14), size: 9, color: .systemOrange, alignment: .right) }
-    }
-    private func ribbon(from start: NSPoint, to end: NSPoint, width: CGFloat) -> CGPath {
-        let path = CGMutablePath(), mid = (start.x + end.x) / 2
-        path.move(to: NSPoint(x: start.x, y: start.y - width / 2))
-        path.addCurve(to: NSPoint(x: end.x, y: end.y - width / 2), control1: NSPoint(x: mid, y: start.y - width / 2), control2: NSPoint(x: mid, y: end.y - width / 2))
-        path.addLine(to: NSPoint(x: end.x, y: end.y + width / 2))
-        path.addCurve(to: NSPoint(x: start.x, y: start.y + width / 2), control1: NSPoint(x: mid, y: end.y + width / 2), control2: NSPoint(x: mid, y: start.y + width / 2))
-        path.closeSubpath(); return path
-    }
-    private func drawRibbons(_ current: EnergyFlow, origin: NSPoint, motionOnly: Bool = false) {
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
-        let values = [current.adapter, current.batteryOut, current.system, current.batteryIn, current.difference]
-        let colors = [blue, green, violet, green, muted]
-        let starts = [NSPoint(x: 82, y: 39), NSPoint(x: 82, y: 129), NSPoint(x: 202, y: 87), NSPoint(x: 202, y: 87), NSPoint(x: 202, y: 87)]
-        let ends = [NSPoint(x: 144, y: 87), NSPoint(x: 144, y: 87), NSPoint(x: flowRect.width - 100, y: 29), NSPoint(x: flowRect.width - 100, y: 87), NSPoint(x: flowRect.width - 100, y: 145)]
-        let maximum = max(1, values.compactMap { $0 }.max() ?? 1)
-        context.saveGState(); context.translateBy(x: origin.x, y: origin.y)
-        defer { context.restoreGState() }
-        let time = ProcessInfo.processInfo.systemUptime / 1.8
-        for index in 0..<5 {
-            let value = values[index], start = starts[index], end = ends[index]
-            let width = value.map { $0 > 0.05 ? max(3, min(28, $0 / maximum * 28)) : 1.2 } ?? 1.2
-            if !motionOnly {
-                context.addPath(ribbon(from: start, to: end, width: width))
-                context.setFillColor(colors[index].withAlphaComponent(value == nil ? 0.02 : 0.18).cgColor)
-                context.setStrokeColor(colors[index].withAlphaComponent(value == nil ? 0.18 : 0.38).cgColor)
-                context.setLineWidth(0.7); context.drawPath(using: .fillStroke)
-            }
-            if !renderingFlowCache && motionTimer != nil && (value ?? 0) > 0.05 {
-                let mid = (start.x + end.x) / 2
-                for offset in [0.0, 0.5] {
-                    let t = (time + Double(index) * 0.13 + offset).truncatingRemainder(dividingBy: 1), u = 1 - t
-                    let x = u*u*u*start.x + 3*u*u*t*mid + 3*u*t*t*mid + t*t*t*end.x
-                    let y = u*u*u*start.y + 3*u*u*t*start.y + 3*u*t*t*end.y + t*t*t*end.y
-                    context.setFillColor(colors[index].withAlphaComponent(0.9).cgColor)
-                    context.fillEllipse(in: NSRect(x: x - 1.8, y: y - 1.8, width: 3.6, height: 3.6))
-                }
-            }
-        }
     }
     private func drawChartPlot(_ index: Int) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
@@ -312,11 +557,18 @@ final class EnergyDocumentView: NSView {
         } else if !running { motionTimer?.invalidate(); motionTimer = nil }
     }
     func removeAnimations() { motionTimer?.invalidate(); motionTimer = nil }
+    private lazy var quitButtons = ProcessQuitButtons(processes: processes, tint: muted)
+    private func layoutQuitButtons() {
+        quitButtons.layout(in: self, rows: (enabled ? processRows : []).map { item in
+            (item.row, NSRect(x: bounds.width - 44, y: item.y - 1, width: 18, height: 18))
+        })
+    }
     private func updateAccessibility() {
+        layoutQuitButtons()
         let f = flow
-        var rows: [(String, NSRect)] = [("Battery \(f.charge.map { String(format: "%.0f percent", $0) } ?? "unavailable"). \(controlStatus). \(power.batteryControlReason ?? "")", NSRect(x: 14, y: 2, width: bounds.width - 28, height: 95))]
+        var rows: [(String, NSRect)] = [("Battery \(f.charge.map { String(format: "%.0f percent", $0) } ?? "unavailable"). \(controlStatus). \(issue ?? "")", batteryBar.insetBy(dx: 0, dy: -6))]
         if showFlow {
-            rows.append(("Power flow. Adapter DC \(EnergyFlow.watts(f.adapter)). Mac system \(EnergyFlow.watts(f.system)). Battery out \(EnergyFlow.watts(f.batteryOut)). Battery in \(EnergyFlow.watts(f.batteryIn)). Calculated unaccounted difference \(EnergyFlow.watts(f.difference)).", flowRect))
+            rows.append(("Power flow. Adapter \(EnergyFlow.watts(f.adapter)): \(EnergyFlow.watts(f.batteryIn)) into the battery. Battery out \(EnergyFlow.watts(f.batteryOut)). Mac system \(EnergyFlow.watts(f.system)). Other, the unaccounted difference, \(EnergyFlow.watts(f.difference)).", flowRect))
         }
         for index in 0..<3 where chartVisibility[index] {
             let id = chartIDs[index], value = monitoring.display(id)
@@ -333,7 +585,7 @@ final class EnergyDocumentView: NSView {
             return element
         }
         setAccessibilityChildren((accessibilityRows as [Any]) + NSAccessibility.unignoredChildren(from: subviews.filter { !$0.isHidden }))
-        toolTip = "Power values are separate sensor observations, not wall-meter or per-component totals. Difference = adapter − system − signed battery flow. Process power includes CPU energy only. The saved MenuSprite charge target is not an active system limit while control is off."
+        toolTip = controlStatus + "\n\nPower values are separate sensor observations, not wall-meter or per-component totals. Difference = adapter − system − signed battery flow. Process power includes CPU energy only. The saved MenuSprite charge target is not an active system limit while control is off."
     }
 }
 
