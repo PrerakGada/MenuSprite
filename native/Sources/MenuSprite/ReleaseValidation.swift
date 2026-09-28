@@ -29,7 +29,8 @@ final class ReleaseValidation {
         check("No privileged executable or installers", !FileManager.default.fileExists(atPath:resources.appendingPathComponent("MenuSpritePowerHelper").path) && !FileManager.default.fileExists(atPath:resources.appendingPathComponent("install-power-helper.sh").path))
         check("Only MenuSprite bundle identity", Bundle.main.bundleIdentifier == "in.prerakgada.MenuSprite")
         let configurations = app.monitoringStore.sprites
-        check("Fresh install has five configured items", configurations.count == 5)
+        check("Fresh install has six configured items", configurations.count == 6)
+        check("Battery item among fresh-install defaults", configurations.contains { $0.metricIDs == ["battery.charge"] })
         check("One CPU usage reading on fresh install", configurations.filter { $0.metricIDs.contains("cpu.usage") }.count == 1)
         check("Network and fan/temp paired defaults", configurations.filter { $0.layout == .twoRows }.count == 2)
         check("AI Accounts board available", app.accountsStore != nil)
