@@ -38,6 +38,8 @@ public struct ProcessConsumerRate: Identifiable, Sendable {
     public let value: Double
     public let processValues: [Int32: Double]
     public let missingCount: Int
+    /// The consumer's sub-rows, ranked by the same readings.
+    public var members: [ProcessConsumerRate] = []
     public var id: String { consumer.id }
 }
 public struct ProcessInterval: Sendable {
@@ -85,6 +87,7 @@ public struct ProcessActivityRates: Sendable {
     }
     public func rank(_ consumers: [MemoryConsumer], by kind: ProcessPanelKind) -> [ProcessConsumerRate] {
         consumers.compactMap { consumer -> ProcessConsumerRate? in
+            let members = consumer.members.map { rank($0, by: kind) } ?? []
             var values: [Int32: Double] = [:]
             for process in consumer.processes {
                 let value: Double? = switch kind {
@@ -96,7 +99,7 @@ public struct ProcessActivityRates: Sendable {
             }
             guard !values.isEmpty else { return nil }
             return .init(consumer: consumer, value: values.values.reduce(0, +), processValues: values,
-                         missingCount: consumer.processCount - values.count)
+                         missingCount: consumer.processCount - values.count, members: members)
         }.sorted { $0.value == $1.value ? $0.id < $1.id : $0.value > $1.value }
     }
 }

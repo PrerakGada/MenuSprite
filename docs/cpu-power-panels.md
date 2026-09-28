@@ -1,5 +1,8 @@
 # CPU and Power process panels — 9 September 2026
 
+Every process row also carries a trailing quit button; see
+[quitting an app from a process panel](quit-processes.md).
+
 Local 0.5.1 uses the shared [process context labels](process-context.md) to make
 runtime and VM rows identifiable without changing their totals or attribution.
 

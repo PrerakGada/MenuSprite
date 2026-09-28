@@ -24,10 +24,10 @@ final class MemoryBoardController: NSViewController {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func loadView() {
-        let root = MemoryPanelBackground(frame: NSRect(x: 0, y: 0, width: 350, height: 780))
+        let root = MemoryPanelBackground(frame: NSRect(x: 0, y: 0, width: 400, height: 780))
         view = root
         let heading = NSTextField(labelWithString: processes.kind.title)
-        heading.font = .systemFont(ofSize: 14, weight: .semibold)
+        heading.font = .systemFont(ofSize: 16, weight: .semibold)
         let symbol = NSImageView(image: NSImage(systemSymbolName: processes.kind.symbol, accessibilityDescription: nil)!)
         symbol.contentTintColor = MemoryDocumentView.accent
         let refresh = iconButton("arrow.clockwise", label: "Refresh \(processes.kind.title)", action: #selector(refreshMemory))
@@ -109,17 +109,26 @@ private final class MemoryDocumentView: NSView {
     private var enabled: Bool { monitoring.sprites.first { $0.id == id }?.enabled == true }
     private var consumers: [ProcessConsumerRate] { Array(processes.ranked.prefix(30)) }
     private var content: ProcessBoardContent { .init(kind: processes.kind, monitoring: monitoring, processes: processes) }
-    private var listStartY: CGFloat { processes.kind == .memory ? 366 : 386 }
-    private var laidOutRows: [(row: ProcessConsumerRate, y: CGFloat, height: CGFloat)] {
+    private var listStartY: CGFloat { processes.kind == .memory ? 394 : 418 }
+    private var laidOutRows: [(row: ProcessConsumerRate, y: CGFloat, height: CGFloat, indent: CGFloat)] {
         var y = listStartY
-        return consumers.map { row in
-            let height: CGFloat = row.consumer.presentation.subtitle == nil ? 22 : 36
+        return processes.visibleRows(limit: 30).map { item in
+            let height: CGFloat = item.row.consumer.presentation.subtitle == nil ? 26 : 42
             defer { y += height }
-            return (row, y, height)
+            return (item.row, y, height, CGFloat(item.depth) * 18)
         }
     }
-    private var rowsEnd: CGFloat { laidOutRows.last.map { $0.y + $0.height } ?? (listStartY + 36) }
-    var requiredHeight: CGFloat { enabled ? rowsEnd + 60 : 140 }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    /// The whole grouped row opens it, not only its small trailing chevron.
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if enabled, let item = laidOutRows.first(where: { !$0.row.members.isEmpty && NSRect(x: 12, y: $0.y, width: bounds.width - 24, height: $0.height).contains(point) }) {
+            processes.toggle(item.row.id); return
+        }
+        super.mouseDown(with: event)
+    }
+    private var rowsEnd: CGFloat { laidOutRows.last.map { $0.y + $0.height } ?? (listStartY + 40) }
+    var requiredHeight: CGFloat { enabled ? rowsEnd + 72 : 140 }
     init(monitoring: MonitoringStore, processes: MemoryBoardStore, id: UUID) {
         self.monitoring = monitoring; self.processes = processes; self.id = id
         super.init(frame: .zero)
@@ -128,7 +137,7 @@ private final class MemoryDocumentView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private func bytes(_ id: String) -> String { MemoryBoardFormat.bytes(monitoring.readings[id]?.number) }
     private var stats: [(String, String)] { content.stats }
-    private func text(_ value: String, at rect: NSRect, size: CGFloat = 11, weight: NSFont.Weight = .regular, color: NSColor = .labelColor, alignment: NSTextAlignment = .left, digits: Bool = false) {
+    private func text(_ value: String, at rect: NSRect, size: CGFloat = 13, weight: NSFont.Weight = .regular, color: NSColor = .labelColor, alignment: NSTextAlignment = .left, digits: Bool = false) {
         let resolved = color == .secondaryLabelColor ? NSColor(calibratedWhite: dark ? 0.68 : 0.40, alpha: 1) : color
         let style = NSMutableParagraphStyle(); style.alignment = alignment; style.lineBreakMode = .byTruncatingMiddle
         (value as NSString).draw(in: rect, withAttributes: [.font: digits ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight) : NSFont.systemFont(ofSize: size, weight: weight), .foregroundColor: resolved, .paragraphStyle: style])
@@ -140,51 +149,64 @@ private final class MemoryDocumentView: NSView {
         super.draw(dirtyRect)
         NSColor(calibratedWhite: dark ? 0.12 : 0.985, alpha: 1).setFill(); bounds.fill()
         let width = bounds.width - 24
-        guard enabled else { text("This \(processes.kind.title) sprite is paused.", at: NSRect(x: 12, y: 16, width: width, height: 20), size: 12, color: .secondaryLabelColor, alignment: .center); return }
+        guard enabled else { text("This \(processes.kind.title) sprite is paused.", at: NSRect(x: 12, y: 16, width: width, height: 20), size: 14, color: .secondaryLabelColor, alignment: .center); return }
         card(NSRect(x: 12, y: 0, width: width, height: 126))
         let percentage = content.mainValue
         text(percentage, at: NSRect(x: 24, y: 10, width: width - 24, height: 42), size: 32, weight: .bold, digits: true)
-        text(content.subtitle, at: NSRect(x: 24, y: 52, width: width - 24, height: 18), size: 11, weight: .medium, color: .secondaryLabelColor, digits: true)
+        text(content.subtitle, at: NSRect(x: 24, y: 52, width: width - 24, height: 20), size: 13, weight: .medium, color: .secondaryLabelColor, digits: true)
         graph(in: NSRect(x: 24, y: 77, width: width - 24, height: 38))
-        card(NSRect(x: 12, y: 136, width: width, height: 180))
+        card(NSRect(x: 12, y: 136, width: width, height: 206))
         for (index, row) in stats.enumerated() {
-            let y = 148 + CGFloat(index) * 23
-            text(row.0, at: NSRect(x: 24, y: y, width: 115, height: 18), color: .secondaryLabelColor)
+            let y = 148 + CGFloat(index) * 26
+            text(row.0, at: NSRect(x: 24, y: y, width: 130, height: 20), color: .secondaryLabelColor)
             if row.0 == "Pressure" {
                 let color: NSColor = row.1 == "Normal" ? .systemGreen : row.1 == "Warning" ? .systemOrange : row.1 == "Critical" ? .systemRed : .secondaryLabelColor
-                let pillWidth = ceil((row.1 as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).width) + 24
-                let rect = NSRect(x: bounds.width - 24 - pillWidth, y: y - 1, width: pillWidth, height: 18)
-                color.withAlphaComponent(0.12).setFill(); NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9).fill()
-                color.setFill(); NSBezierPath(ovalIn: NSRect(x: rect.minX + 7, y: y + 5, width: 6, height: 6)).fill()
-                text(row.1, at: NSRect(x: rect.minX + 17, y: y, width: pillWidth - 20, height: 16), weight: .medium, color: color)
-            } else { text(row.1, at: NSRect(x: 134, y: y, width: bounds.width - 158, height: 18), weight: .medium, alignment: .right, digits: true) }
+                let pillWidth = ceil((row.1 as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)]).width) + 26
+                let rect = NSRect(x: bounds.width - 24 - pillWidth, y: y - 1, width: pillWidth, height: 21)
+                color.withAlphaComponent(0.12).setFill(); NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10).fill()
+                color.setFill(); NSBezierPath(ovalIn: NSRect(x: rect.minX + 8, y: y + 6.5, width: 7, height: 7)).fill()
+                text(row.1, at: NSRect(x: rect.minX + 19, y: y, width: pillWidth - 22, height: 20), weight: .medium, color: color)
+            } else { text(row.1, at: NSRect(x: 150, y: y, width: bounds.width - 174, height: 20), weight: .medium, alignment: .right, digits: true) }
         }
-        card(NSRect(x: 12, y: 326, width: width, height: requiredHeight - 338))
-        text(processes.kind.listTitle, at: NSRect(x: 24, y: 339, width: width - 24, height: 18), weight: .medium, color: .secondaryLabelColor)
+        card(NSRect(x: 12, y: 352, width: width, height: requiredHeight - 364))
+        text(processes.kind.listTitle, at: NSRect(x: 24, y: 365, width: width - 24, height: 20), weight: .medium, color: .secondaryLabelColor)
         if processes.kind != .memory {
             let scope = processes.kind == .cpu ? "100% = one CPU core. Includes app helpers." : "CPU energy estimate; excludes GPU, display and other parts."
-            text(scope, at: NSRect(x: 24, y: 358, width: width - 24, height: 16), size: 9, color: .secondaryLabelColor)
+            text(scope, at: NSRect(x: 24, y: 388, width: width - 24, height: 18), size: 11, color: .secondaryLabelColor)
         }
         for item in laidOutRows {
             let row = item.row, consumer = row.consumer, presentation = consumer.presentation
-            let y = item.y
+            let y = item.y, indent = item.indent
             guard NSRect(x: 12, y: y, width: width, height: item.height).intersects(dirtyRect) else { continue }
-            let rect = NSRect(x: 24, y: y, width: 14, height: 14)
+            if indent > 0 {
+                NSColor.separatorColor.setFill(); NSRect(x: 31, y: y, width: 1, height: item.height).fill()
+            }
+            let rect = NSRect(x: 24 + indent, y: y + 1, width: 16, height: 16)
             if let path = presentation.iconBundlePath, let icon = processes.icons[path] { icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil) }
             else { NSImage(systemSymbolName: presentation.symbol, accessibilityDescription: nil)?.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.65, respectFlipped: true, hints: nil) }
-            text(presentation.title, at: NSRect(x: 46, y: y - 1, width: bounds.width - 145, height: 18), weight: presentation.subtitle == nil ? .regular : .medium)
-            if let subtitle = presentation.subtitle { text(subtitle, at: NSRect(x: 46, y: y + 16, width: bounds.width - 70, height: 15), size: 9, color: .secondaryLabelColor) }
-            text(content.formatted(row), at: NSRect(x: bounds.width - 95, y: y - 1, width: 71, height: 18), color: .secondaryLabelColor, alignment: .right, digits: true)
+            text(presentation.title, at: NSRect(x: 48 + indent, y: y, width: bounds.width - 187 - indent, height: 20), weight: presentation.subtitle == nil ? .regular : .medium)
+            if let subtitle = presentation.subtitle { text(subtitle, at: NSRect(x: 48 + indent, y: y + 19, width: bounds.width - 96 - indent, height: 17), size: 11, color: .secondaryLabelColor) }
+            // A row asked to quit shows that instead of its reading: a cooperative
+            // app is gone before the next sample, so a reading that has not moved
+            // must not be the only thing the click appears to have done.
+            if ProcessQuitArming.shared.isArmed(row.id) {
+                text("quitting…", at: NSRect(x: bounds.width - 135, y: y + 1, width: 85, height: 18), size: 11, weight: .medium, color: .systemOrange, alignment: .right)
+            } else {
+                text(content.formatted(row), at: NSRect(x: bounds.width - 135, y: y, width: 85, height: 20), color: .secondaryLabelColor, alignment: .right, digits: true)
+            }
         }
         if consumers.isEmpty {
-            text(processes.loading ? "Reading processes…" : processes.emptyMessage, at: NSRect(x: 24, y: listStartY, width: width - 24, height: 34), color: .secondaryLabelColor)
+            text(processes.loading ? "Reading processes…" : processes.emptyMessage, at: NSRect(x: 24, y: listStartY, width: width - 24, height: 40), color: .secondaryLabelColor)
         }
         let footY = rowsEnd + 4
-        text(processes.kind.scope, at: NSRect(x: 24, y: footY, width: width - 24, height: 16), size: 9, color: .secondaryLabelColor)
+        text(processes.kind.scope, at: NSRect(x: 24, y: footY, width: width - 24, height: 18), size: 11, color: .secondaryLabelColor)
         if let snapshot = processes.snapshot {
             let missing = snapshot.unavailableCount + max(0, snapshot.readableCount - processes.comparableCount)
             let detail = missing > 0 ? "\(missing) unavailable / awaiting interval · 5s refresh" : "Updates every 5 seconds while open"
-            text(detail, at: NSRect(x: 24, y: footY + 15, width: width - 24, height: 16), size: 9, color: .secondaryLabelColor)
+            text(detail, at: NSRect(x: 24, y: footY + 19, width: width - 24, height: 18), size: 11, color: .secondaryLabelColor)
+        }
+        if let notice = processes.notice {
+            text(notice, at: NSRect(x: 24, y: footY + 38, width: width - 24, height: 18), size: 11, weight: .medium, color: Self.accent)
         }
     }
     private func graph(in rect: NSRect) {
@@ -201,16 +223,25 @@ private final class MemoryDocumentView: NSView {
         NSGradient(starting: Self.accent.withAlphaComponent(0.22), ending: Self.accent.withAlphaComponent(0.01))?.draw(in: fill, angle: 90)
         Self.accent.setStroke(); line.lineWidth = 1.5; line.stroke()
     }
+    private lazy var quitButtons = ProcessQuitButtons(processes: processes)
+    private func layoutQuitButtons() {
+        let rows = enabled ? laidOutRows : []
+        quitButtons.layout(in: self, rows: rows.map { item in
+            (item.row, NSRect(x: bounds.width - 44, y: item.y, width: 20, height: 20))
+        })
+    }
     func refreshAccessibilityAndTooltips() {
+        layoutQuitButtons()
         defer { syncAccessibleElements() }
         removeAllToolTips(); tips = [:]; accessibleRows = []
         guard enabled else { accessibleRows = [("This \(processes.kind.title) sprite is paused", NSRect(x: 12, y: 16, width: 300, height: 20))]; return }
         accessibleRows.append(("\(processes.kind.title): \(content.mainValue)", NSRect(x: 24, y: 10, width: 300, height: 42)))
-        for (index, row) in stats.enumerated() { accessibleRows.append((row.0 + ": " + row.1, NSRect(x: 24, y: 148 + CGFloat(index) * 23, width: 300, height: 18))) }
+        for (index, row) in stats.enumerated() { accessibleRows.append((row.0 + ": " + row.1, NSRect(x: 24, y: 148 + CGFloat(index) * 26, width: 300, height: 20))) }
         for item in laidOutRows {
             let row = item.row, consumer = row.consumer
             let rect = NSRect(x: 24, y: item.y, width: max(0, bounds.width - 48), height: item.height)
-            let label = "\(consumer.presentation.title), \(consumer.presentation.subtitle ?? "application"): \(content.formatted(row)), \(consumer.processCount) processes"
+            var label = "\(consumer.presentation.title), \(consumer.presentation.subtitle ?? "application"): \(content.formatted(row)), \(consumer.processCount) processes"
+            if !row.members.isEmpty { label += processes.expanded.contains(row.id) ? ", expanded" : ", collapsed" }
             accessibleRows.append((label, rect))
             let tag = addToolTip(rect, owner: self, userData: nil)
             tips[tag] = content.tooltip(row)
@@ -231,7 +262,8 @@ private final class MemoryDocumentView: NSView {
         for (element, row) in zip(accessibleElements, accessibleRows) {
             element.setAccessibilityFrame(window?.convertToScreen(convert(row.1, to: nil)) ?? row.1)
         }
-        return accessibleElements
+        // The per-row quit buttons are real controls; keep them reachable.
+        return (accessibleElements as [Any]) + NSAccessibility.unignoredChildren(from: subviews.filter { !$0.isHidden })
     }
 }
 

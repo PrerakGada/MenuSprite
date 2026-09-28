@@ -48,6 +48,10 @@ struct ProcessBoardContent {
             result += "\nExecutable: " + ProcessPresentation.shortPath(process.executablePath)
         }
         if row.missingCount > 0 { result += "\nSubtotal: \(row.missingCount) processes are awaiting an interval or unavailable." }
+        if !row.members.isEmpty {
+            return result + "\n" + row.members.prefix(8).map { "\($0.consumer.presentation.title): \(formatted($0))" }.joined(separator: "\n")
+                + (row.members.count > 8 ? "\n… and \(row.members.count - 8) more" : "")
+        }
         return result + "\n" + consumer.processes.sorted { (row.processValues[$0.pid] ?? -1) > (row.processValues[$1.pid] ?? -1) }.prefix(8).map { process in
             "\(process.name) (PID \(process.pid)): \(row.processValues[process.pid].map(kind.formatted) ?? "Unavailable / awaiting interval")"
         }.joined(separator: "\n")
@@ -61,6 +65,8 @@ extension SpriteConfiguration {
         guard !metricIDs.isEmpty else { return nil }
         if metricIDs.allSatisfy({ $0.hasPrefix("memory.") }) { return .memory }
         if metricIDs.allSatisfy({ $0.hasPrefix("cpu.") }) { return .cpu }
+        // The battery item opens the same Battery & Power dashboard as the PWR sprite.
+        if isBatteryItem { return .power }
         let powerIDs: Set<String> = ["sensor.PSTR", "sensor.PDTR", "battery.power", "battery.adapterRated"]
         if metricIDs.allSatisfy({ powerIDs.contains($0) }) { return .power }
         return nil

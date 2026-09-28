@@ -32,6 +32,10 @@ public struct MemoryConsumer: Identifiable, Sendable, Codable, Equatable {
     public let bundlePath: String?
     public let bytes: UInt64
     public let processes: [ProcessMemoryRecord]
+    /// Sub-rows a grouped row can expand into (one per Claude Code session, or per
+    /// Arc tab). The
+    /// members partition `processes`; totals are never counted twice.
+    public var members: [MemoryConsumer]? = nil
     public var processCount: Int { processes.count }
     public var presentation: ProcessPresentation { ProcessPresentation(consumer: self) }
 }
@@ -68,17 +72,34 @@ public enum MemoryAttribution {
             if let app = byAppPID[process.pid], let path = appBundle(in: app.bundlePath) { return bundleOwner(path) }
             return nil
         }
-        func owner(_ process: ProcessMemoryRecord) -> Owner {
-            if let direct = directOwner(process) { return direct }
-            var current = process
-            var visited: Set<Int32> = [process.pid]
-            // Attribute terminal/tool children only through observed live ancestry.
-            // Never infer ownership from name similarity or a reused parent PID.
+        // The live chain a process was started through. A parent must be the same
+        // user and older than its child, so a reused PID never joins a chain.
+        func ancestors(_ process: ProcessMemoryRecord) -> [ProcessMemoryRecord] {
+            var result: [ProcessMemoryRecord] = [], current = process, visited: Set<Int32> = [process.pid]
             while current.parentPID > 1, let parent = byPID[current.parentPID], parent.userID == process.userID,
                   parent.started <= current.started, visited.insert(parent.pid).inserted {
-                if let direct = directOwner(parent) { return direct }
-                current = parent
+                result.append(parent); current = parent
             }
+            return result
+        }
+        func isClaude(_ process: ProcessMemoryRecord) -> Bool { ClaudeCode.isExecutable(process.executablePath) }
+        // Claude Code and everything it started (MCP servers, tool shells), in any
+        // terminal or editor. A child that is itself an app bundle stays that app's.
+        func belongsToClaude(_ process: ProcessMemoryRecord) -> Bool {
+            if isClaude(process) { return true }
+            if directOwner(process) != nil { return false }
+            for parent in ancestors(process) {
+                if isClaude(parent) { return true }
+                if directOwner(parent) != nil { return false }
+            }
+            return false
+        }
+        func owner(_ process: ProcessMemoryRecord) -> Owner {
+            if belongsToClaude(process) { return Owner(id: ClaudeCode.groupID, name: "Claude Code", bundle: nil) }
+            if let direct = directOwner(process) { return direct }
+            // Attribute terminal/tool children only through observed live ancestry.
+            // Never infer ownership from name similarity or a reused parent PID.
+            for parent in ancestors(process) { if let direct = directOwner(parent) { return direct } }
             return Owner(id: "process:\(process.pid):\(process.started)", name: process.name, bundle: nil)
         }
         var groups: [String: (owner: Owner, records: [ProcessMemoryRecord])] = [:]
@@ -87,10 +108,30 @@ public enum MemoryAttribution {
             if groups[target.id] == nil { groups[target.id] = (target, []) }
             groups[target.id]!.records.append(process)
         }
+        func consumer(_ id: String, _ name: String, _ bundle: String?, _ records: [ProcessMemoryRecord]) -> MemoryConsumer {
+            MemoryConsumer(id: id, name: name, bundlePath: bundle, bytes: records.reduce(0) { $0 + $1.bytes },
+                           processes: records.sorted { $0.bytes == $1.bytes ? $0.pid < $1.pid : $0.bytes > $1.bytes })
+        }
+        // Each process joins the nearest Claude Code process with a session record
+        // (itself included); the daemon and its spares have none.
+        func claudeSessions(_ records: [ProcessMemoryRecord]) -> [MemoryConsumer] {
+            var sessions: [String: (root: ProcessMemoryRecord?, records: [ProcessMemoryRecord])] = [:]
+            for process in records {
+                let root = ([process] + ancestors(process)).first { isClaude($0) && $0.context?.claudeSession != nil }
+                let id = root.map { ClaudeCode.sessionPrefix + "\($0.pid):\($0.started)" } ?? ClaudeCode.serviceID
+                sessions[id, default: (root, [])].records.append(process)
+            }
+            return sessions.map { id, session in
+                consumer(id, session.root?.context?.claudeSession?.title ?? "Claude Code", nil, session.records)
+            }.sorted { $0.bytes == $1.bytes ? $0.id < $1.id : $0.bytes > $1.bytes }
+        }
         return groups.values.map { group in
-            MemoryConsumer(id: group.owner.id, name: group.owner.name, bundlePath: group.owner.bundle,
-                           bytes: group.records.reduce(0) { $0 + $1.bytes },
-                           processes: group.records.sorted { $0.bytes == $1.bytes ? $0.pid < $1.pid : $0.bytes > $1.bytes })
+            var result = consumer(group.owner.id, group.owner.name, group.owner.bundle, group.records)
+            if group.owner.id == ClaudeCode.groupID { result.members = claudeSessions(group.records) }
+            if BrowserTabs.isBrowser(bundlePath: group.owner.bundle) {
+                result.members = BrowserTabs.members(groupID: group.owner.id, group.records) { records, id, name in consumer(id, name, nil, records) }
+            }
+            return result
         }.sorted { $0.bytes == $1.bytes ? $0.id < $1.id : $0.bytes > $1.bytes }
     }
 }
@@ -126,6 +167,11 @@ public actor ProcessMemorySampler {
         let listed = Set(pids.prefix(min(pids.count, Int(returned) / MemoryLayout<Int32>.size)).filter { $0 > 0 })
         var records: [ProcessMemoryRecord] = []
         var nextPaths: [Int32: CachedPath] = [:]
+        // Arc's Task Manager, when it happens to be open, names its renderers.
+        // One Accessibility query for its windows otherwise; nothing when Arc is not running.
+        let names = BrowserTabNames.shared
+        if let browser = applications.first(where: { BrowserTabs.isBrowser(bundlePath: $0.bundlePath) }),
+           let rows = ChromiumTaskManager.readOpen(appPID: browser.pid) { names.record(rows) }
         for pid in listed {
             if Task.isCancelled { break }
             guard let first = readUsage(pid) else { continue }
@@ -146,7 +192,10 @@ public actor ProcessMemorySampler {
             nextPaths[pid] = CachedPath(started: confirmed.ri_proc_start_abstime, path: path)
             let name = withUnsafeBytes(of: &bsd.pbi_name) { String(decoding: $0.prefix(while: { $0 != 0 }), as: UTF8.self) }
             let fallback = withUnsafeBytes(of: &bsd.pbi_comm) { String(decoding: $0.prefix(while: { $0 != 0 }), as: UTF8.self) }
-            let context = contextReader.read(pid: pid, started: confirmed.ri_proc_start_abstime, name: name, path: path, userID: bsd.pbi_uid)
+            var context = contextReader.read(pid: pid, started: confirmed.ri_proc_start_abstime, startSeconds: bsd.pbi_start_tvsec, name: name, path: path, userID: bsd.pbi_uid)
+            if BrowserTabs.isRenderer(path), let named = names.names(pid: pid, started: confirmed.ri_proc_start_abstime) {
+                context = ProcessContext(browserTasks: named.tasks, browserTasksSeen: named.seen)
+            }
             // Context belongs to the same process identity, even if a runtime
             // exits while cwd/descriptor metadata is being read.
             guard let identity = readUsage(pid), identity.info.ri_proc_start_abstime == confirmed.ri_proc_start_abstime else { continue }
@@ -160,6 +209,7 @@ public actor ProcessMemorySampler {
         }
         paths = nextPaths
         contextReader.retain(Set(records.map(\.pid)))
+        names.retain(Set(records.map(\.pid)))
         return .init(consumers: MemoryAttribution.group(records, applications: applications), listedCount: listed.count,
                      readableCount: records.count, unavailableCount: listed.count - records.count, sampledAt: Date(), error: nil)
     }

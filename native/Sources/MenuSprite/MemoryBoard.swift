@@ -20,7 +20,39 @@ final class MemoryBoardStore: ObservableObject {
     }
     var comparableCount: Int { ranked.reduce(0) { $0 + $1.processValues.count } }
     @Published private(set) var icons: [String: NSImage] = [:]
+    /// Grouped rows the user has opened. Kept while the board lives, so a group
+    /// stays open across refreshes and re-ranking.
+    @Published private(set) var expanded: Set<String> = []
+    func toggle(_ id: String) { if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) } }
+    /// The ranked rows as drawn: an open group is followed by its members.
+    func visibleRows(limit: Int) -> [(row: ProcessConsumerRate, depth: Int)] {
+        ranked.prefix(limit).flatMap { row in
+            [(row, 0)] + (expanded.contains(row.id) ? row.members.map { ($0, 1) } : [])
+        }
+    }
+    /// A top-level row or a member of one, by consumer id.
+    func row(id: String) -> ProcessConsumerRate? {
+        for row in ranked {
+            if row.id == id { return row }
+            if let member = row.members.first(where: { $0.id == id }) { return member }
+        }
+        return nil
+    }
+    /// What the last quit request actually did. Shown in the panel footer rather
+    /// than an alert, so the board stays open and the wording can be exact.
+    @Published private(set) var notice: String?
+    private var noticeTask: Task<Void, Never>?
+    func note(_ text: String) {
+        notice = text
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            self?.notice = nil
+        }
+    }
     private var task: Task<Void, Never>?
+    private var sleeper: Task<Void, Never>?
     private var generation = 0
     private(set) var sampleCount = 0
     private(set) var isRunning = false
@@ -45,7 +77,13 @@ final class MemoryBoardStore: ObservableObject {
                 self.ranked = self.rates.rank(result.consumers, by: self.kind)
                 self.hasInterval = self.rates.hasInterval; self.energyObserved = self.rates.energyObserved
                 self.loadIcons()
-                do { try await Task.sleep(for: .seconds(self.kind != .memory && !self.hasInterval ? 1 : self.interval)) } catch { return }
+                // The wait is its own task so `resample()` can cut it short. A quit
+                // that worked must leave the list at once, not up to an interval later.
+                let seconds = self.kind != .memory && !self.hasInterval ? 1 : self.interval
+                let nap = Task<Void, Never> { try? await Task.sleep(for: .seconds(seconds)) }
+                self.sleeper = nap
+                await nap.value
+                if Task.isCancelled { return }
             }
         }
     }
@@ -81,8 +119,13 @@ final class MemoryBoardStore: ObservableObject {
         }
         icons = next
     }
+    /// Take the next sample now instead of waiting out the interval. Used right
+    /// after a quit request so a row that actually went disappears immediately.
+    func resample() { sleeper?.cancel() }
     func stop() {
         generation += 1; task?.cancel(); task = nil; isRunning = false
+        sleeper?.cancel(); sleeper = nil
+        noticeTask?.cancel(); noticeTask = nil; notice = nil
         snapshot = nil; icons = [:]; loading = true
         ranked = []; rates = ProcessActivityRates(); hasInterval = false; energyObserved = false
     }

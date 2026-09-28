@@ -1,5 +1,8 @@
 # Memory panel — 8 September 2026
 
+Every process row also carries a trailing quit button; see
+[quitting an app from a process panel](quit-processes.md).
+
 Local **0.5.1** now adds [process context labels](process-context.md): working
 folders, runtimes, worktree names and PIDs, plus evidence-based VM host hints.
 The accounting/grouping described below remains unchanged.

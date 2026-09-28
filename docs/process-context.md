@@ -68,3 +68,63 @@ remain local under ignored `native/.build/validation/`.
   local observations, not guarantees or claims about another application's memory.
 
 The public Homebrew/DMG release is unchanged by this local feature update.
+
+## Claude Code sessions — 24 September 2026
+
+Prerak asked for a way to tell Claude Code sessions apart in the RAM list and to see
+their combined cost at a glance. Each session appeared as its own row named after its
+executable (`~/.local/share/claude/versions/2.1.281`, so the row read "2.1.281"), and
+each of its MCP `node` servers as another row. Ancestry could not help: a terminal
+session's chain runs through `/usr/bin/login`, which is root-owned and unreadable, so
+nothing reached iTerm. On the day it was built this Mac had **23 sessions, 107
+processes, about 8.3 GiB**, spread over roughly 90 rows.
+
+**What is shown.** RAM, CPU and Power (panels, hub, and the Battery & Power dashboard)
+now have one **Claude Code** row with the combined reading, captioned "23 sessions ·
+2 working". It gathers every Claude Code process (the native installer's versioned
+binaries and the editor extensions' `claude` binary) and everything each one started
+(MCP servers, tool shells) through live ancestry. This applies in any terminal or editor, so
+a session inside VS Code joins it too. A child that is itself an app bundle (for example a
+Chromium launched by a tool) stays that app's row. Clicking the row, or its chevron,
+expands it into one row per session:
+
+- **Title**: your rename if you gave one, otherwise Claude Code's own auto title
+  ("TB Stores physical stock reconciliation"), otherwise the project folder.
+- **Caption**: project · `working` / `idle 2 d` / Claude Code's own status word ·
+  `background` for daemon-hosted sessions · PID.
+- **Reading**: the session's own process plus its MCP servers and tools.
+- **Quit** on each session row, same one-click / second-click-forces behaviour as
+  every other row. The hover text gives `claude --resume <session id>` to reopen it.
+
+The daemon and its spare processes, which have no session, form one "Claude Code
+background service" member. **The group row has no quit.** One click would end every
+session, including busy ones and the one doing the asking. Its trailing control opens
+the group instead.
+
+Members partition the group's processes; totals are never counted twice. An npm-installed
+Claude Code runs as `node` and is not recognised, because telling it apart would need its command line.
+
+**Files read: a deliberate, scoped exception to "no file contents".** For a
+Claude Code process owned by this user only:
+
+- `~/.claude/sessions/<pid>.json` (Claude Code's own registry: session id, cwd,
+  status, last activity, name). It is rejected when its `pid` differs or its `startedAt`
+  is more than 10 minutes from the live process's start, so a reused PID never takes a
+  dead session's label. Re-read only when its modification date changes.
+- The last 64 KiB (at most 256 KiB) of that session's transcript
+  `~/.claude/projects/<folder>/<session>.jsonl`, for the `custom-title` / `ai-title`
+  lines only. Other lines are skipped without being parsed unless they contain one of
+  those type names, and anything parsed that is not a title is discarded. The title is
+  kept in memory. It is re-checked at most every 30 seconds, and only when the file has
+  grown.
+
+No prompt, message or tool text is kept. Nothing is written. Caches live with the
+open panel's sampler and are pruned to live PIDs every sample.
+
+**Verification.** `ClaudeCodeTests` (8 tests) covers grouping and partition, editor
+and app-bundle children, wording, the group's refusal to quit, member ranking, the
+reader's rename precedence, reused-PID rejection, the "mentions ai-title" false
+positive, and old snapshots decoding. All 89 package tests pass. The live probe
+(`MENUSPRITE_LIVE_PROBE=1 swift test --filter liveClaudeSessionsProbe`, which prints
+private titles) matched every running session to its title. The panel itself has
+**not** been checked by eye yet.

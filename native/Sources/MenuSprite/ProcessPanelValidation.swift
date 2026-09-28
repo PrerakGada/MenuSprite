@@ -28,8 +28,11 @@ final class ProcessPanelValidation {
             var view = app.spriteMenuBar?.openBoardForValidation(sprite.id)
             var board = app.spriteMenuBar?.memoryBoardStoreForValidation(sprite.id)
             check("\(kind.title): correct native panel", view != nil && board?.kind == kind)
-            try await pause(3)
-            guard let snapshot = board?.snapshot, let ranked = board?.ranked else { throw CocoaError(.coderReadCorrupt) }
+            // Wait for the first real sample rather than assuming it lands inside a
+            // fixed pause: a full process scan runs long on a loaded Mac, and a slow
+            // first sample is not a failure of what this harness checks.
+            for _ in 0..<40 where board?.snapshot == nil || board?.ranked.isEmpty != false { try await pause(0.5) }
+            guard let snapshot = board?.snapshot, let ranked = board?.ranked, !ranked.isEmpty else { throw CocoaError(.coderReadCorrupt) }
             check("\(kind.title): live ranked rows", !ranked.isEmpty && ranked.contains { $0.value > 0 })
             check("\(kind.title): descending and finite", zip(ranked, ranked.dropFirst()).allSatisfy { $0.value >= $1.value } && ranked.allSatisfy { $0.value.isFinite && $0.value >= 0 })
             check("\(kind.title): aggregate equals member readings", ranked.allSatisfy { abs($0.value - $0.processValues.values.reduce(0, +)) < 0.00001 })
@@ -48,6 +51,14 @@ final class ProcessPanelValidation {
             if kind != .memory { try await measure("\(kind.rawValue)-panel-open", seconds: 15) }
             else { try await pause(1) }
             if kind != .memory { check("\(kind.title): ongoing refresh", (board?.sampleCount ?? 0) > before) }
+            // A quit request cuts the interval short so a row that went actually
+            // leaves the list at once; without it the row lingers up to 5 seconds
+            // and a successful quit reads as a click that did nothing.
+            let beforeResample = board?.sampleCount ?? 0
+            board?.resample()
+            try await pause(1.2)
+            check("\(kind.title): a quit request resamples within a second", (board?.sampleCount ?? 0) > beforeResample)
+            if let view { checkQuitControls(in: view, kind: kind, ranked: board?.ranked ?? ranked) }
             if let view { try render(view, name: kind.rawValue) }
             view = nil
             weak let released = board
@@ -75,6 +86,36 @@ final class ProcessPanelValidation {
         guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: bitmap)
         try bitmap.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("\(name)-panel.png"))
+        // The panel only shows what fits; the scrolling document carries the whole
+        // process list, including rows and row controls below the fold.
+        if let document = scrollDocument(in: view) {
+            document.layoutSubtreeIfNeeded(); document.displayIfNeeded()
+            guard let full = document.bitmapImageRepForCachingDisplay(in: document.bounds) else { return }
+            document.cacheDisplay(in: document.bounds, to: full)
+            try full.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("\(name)-list.png"))
+        }
+    }
+    /// The row buttons act immediately, so the binding between a button and the
+    /// row drawn beside it is checked in the real panel, not only in tests.
+    private func checkQuitControls(in view: NSView, kind: ProcessPanelKind, ranked: [ProcessConsumerRate]) {
+        guard let document = scrollDocument(in: view) else { return check("\(kind.title): quit controls reachable", false) }
+        let buttons = document.subviews.compactMap { $0 as? NSButton }.filter {
+            !$0.isHidden && (($0.accessibilityLabel() ?? "").hasPrefix("Quit ") || ($0.accessibilityLabel() ?? "").hasPrefix("Force quit ")
+                             || ($0.accessibilityLabel() ?? "").contains("does not permit quitting"))
+        }
+        let rows = Array(ranked.prefix(30))
+        check("\(kind.title): one quit control per listed row", !buttons.isEmpty && buttons.count == rows.count)
+        check("\(kind.title): each quit control names the row it sits on",
+              zip(buttons, rows).allSatisfy { ($0.0.accessibilityLabel() ?? "").contains($0.1.consumer.presentation.title) })
+        check("\(kind.title): quit is offered only for rows this user owns",
+              zip(buttons, rows).allSatisfy { $0.0.isEnabled == ProcessTermination.plan(for: $0.1.consumer).canQuit })
+        check("\(kind.title): quit controls sit beside their row, inside the list",
+              zip(buttons, rows).allSatisfy { $0.0.frame.maxX <= document.bounds.width && $0.0.frame.minX > document.bounds.width / 2 })
+    }
+    private func scrollDocument(in view: NSView) -> NSView? {
+        if let scroll = view as? NSScrollView { return scroll.documentView }
+        for subview in view.subviews { if let found = scrollDocument(in: subview) { return found } }
+        return nil
     }
     private func usage() -> (rss: Double, footprint: Double, cpu: Double) {
         var info = task_vm_info_data_t(); var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
