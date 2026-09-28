@@ -32,6 +32,8 @@ final class SpriteMenuBar {
         return item.boardView
     }
     func memoryBoardStoreForValidation(_ id: UUID) -> MemoryBoardStore? { items[id]?.memoryStore }
+    /// The exact menu a secondary click would show, built without popping it.
+    func contextMenuForValidation(_ id: UUID) -> NSMenu? { items[id]?.buildContextMenu() }
     func energyBoardForValidation(_ id: UUID) -> EnergyBoardController? { items[id]?.energyController }
     func closePresentedBoard() -> Bool {
         for item in items.values where item.hasVisibleMemoryPanel { item.closeBoard(); return true }
@@ -73,7 +75,13 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
     private(set) var memoryStore: MemoryBoardStore?
     private(set) var energyController: EnergyBoardController?
     private var renderedSignature = ""
+    private var reservedWidths: [CGFloat] = []
+    private var reservedSince: [Double] = []
+    /// A width kept for a value that no longer needs it is given up after this long, so one 100%
+    /// reading does not hold an extra digit for the rest of the day.
+    private static let reserveLifetime: Double = 90
     private var lastSymbol = ""
+    private var contextMenu: SpriteContextMenu?
     private var lastRenderTime = 0.0
 
     init(config: SpriteConfiguration, store: MonitoringStore, power: PowerStore, showPower: @escaping () -> Void, openEditor: @escaping (SpriteConfiguration) -> Void,
@@ -84,9 +92,20 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         super.init()
         item.autosaveName = "MonitorSprite-\(config.id.uuidString)"
         item.button?.target = self
-        item.button?.action = #selector(showBoard)
+        item.button?.action = #selector(clicked)
+        // Secondary click opens the sprite menu; on a battery item it switches Low Power Mode
+        // instead, and control-click (or option-right-click) opens the charge-control menu.
+        // Primary click keeps opening the board.
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         update(config)
+        // macOS posts this when Low Power Mode changes, from any thread and from any cause.
+        powerStateObserver = NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { guard let self, self.config.isBatteryItem else { return }; self.redraw() }
+        }
     }
+    private var powerStateObserver: NSObjectProtocol?
+    /// Draw now rather than at the next refresh interval.
+    private func redraw() { lastRenderTime = 0; update(config) }
     func update(_ config: SpriteConfiguration) {
         let configurationChanged = self.config != config
         self.config = config
@@ -95,19 +114,45 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         guard configurationChanged || now - lastRenderTime >= config.interval else { return }
         let text = store.menuText(config)
         let columns = store.menuColumns(config)
-        let signature = "\(text)|\(config.fontSize)|\(config.bold)|\(config.colorHex)|\(config.iconColorHex)|\(config.symbol)|\(config.name)|\(config.layout.rawValue)|\(config.showLabels)|\(config.enabled)|\(config.showIcon)|\(config.colorRule.rawValue)|\(columns.map { $0.colorHex ?? "" })"
+        // The ceiling is drawn only while the hardware is actually being limited, so the
+        // tick reports the control rather than the saved intention.
+        let icon: ReadoutIcon = config.isBatteryItem
+            ? .battery(store.batteryGlyph(ceiling: power.activeCeiling, for: config))
+            : .symbol(config.symbol)
+        let signature = "\(text)|\(config.fontSize)|\(config.bold)|\(config.colorHex)|\(config.iconColorHex)|\(config.symbol)|\(config.name)|\(config.layout.rawValue)|\(config.showLabels)|\(config.enabled)|\(config.showIcon)|\(config.colorRule.rawValue)|\(config.batteryPercentPlacement.rawValue)|\(columns.map { $0.colorHex ?? "" })|\(icon)"
         guard signature != renderedSignature else { return }
         renderedSignature = signature
         lastRenderTime = now
         if config.enabled {
             button.attributedTitle = NSAttributedString(string: "")
-            button.image = StackedReadout.image(columns: columns, config: config, height: NSStatusBar.system.thickness)
+            // A column keeps the widest width it has needed lately, so a value crossing a digit
+            // boundary does not shuffle the menu bar every second. A configuration change starts
+            // afresh, and a width nothing needs any more lapses after `reserveLifetime`.
+            let height = NSStatusBar.system.thickness
+            let natural = StackedReadout.layout(columns: columns, config: config, height: height, icon: icon).valueWidths
+            if configurationChanged || reservedWidths.count != natural.count {
+                reservedWidths = natural
+                reservedSince = natural.map { _ in now }
+            }
+            for index in natural.indices where natural[index] >= reservedWidths[index] || now - reservedSince[index] > Self.reserveLifetime {
+                reservedWidths[index] = natural[index]
+                reservedSince[index] = now
+            }
+            button.image = StackedReadout.image(columns: columns, config: config, height: height, icon: icon, reserved: reservedWidths)
             button.imagePosition = .imageOnly
             button.imageScaling = .scaleNone
             lastSymbol = ""
         } else {
             if !config.showIcon {
                 button.image = nil; button.imagePosition = .noImage; lastSymbol = ""
+            } else if case .battery(let glyph) = icon {
+                let height = NSStatusBar.system.thickness
+                let size = NSSize(width: BatteryGlyph.width(forHeight: 14), height: height)
+                let drawn = NSImage(size: size, flipped: false) { rect in
+                    glyph.draw(in: rect, ink: .black); return true
+                }
+                drawn.isTemplate = !glyph.forcesColor
+                button.image = drawn; button.imagePosition = .imageLeft; lastSymbol = ""
             } else if lastSymbol != config.symbol {
                 let image = NSImage(systemSymbolName: config.symbol, accessibilityDescription: config.name)
                     ?? NSImage(systemSymbolName: "gauge.with.dots.needle.50percent", accessibilityDescription: config.name)
@@ -121,7 +166,11 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
             title.append(StackedReadout.attributedText(columns: columns, config: config))
             button.attributedTitle = title
         }
-        button.toolTip = "\(config.name) — \(config.enabled ? (config.opensAccountsBoard ? "click for AI accounts" : "click for readings") : "paused")"
+        if config.isBatteryItem, case .battery(let glyph) = icon {
+            button.toolTip = "\(glyph.summary) · \(power.limitStatus)\nClick for Battery & Power · right-click toggles Low Power Mode · control-click for charge controls"
+        } else {
+            button.toolTip = "\(config.name) — \(config.enabled ? (config.opensAccountsBoard ? "click for AI accounts" : "click for readings") : "paused")"
+        }
         button.setAccessibilityLabel("\(config.name): \(text)")
     }
     var hasVisibleMemoryPanel: Bool { memoryPanel?.isVisible == true }
@@ -135,6 +184,29 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         store.closeBoard(config.id)
         popover?.performClose(nil)
         memoryPanel?.close()
+    }
+    @objc private func clicked() {
+        let event = NSApp.currentEvent
+        let secondary = event?.type == .rightMouseUp
+        let modified = event?.modifierFlags.contains(.control) == true || event?.modifierFlags.contains(.option) == true
+        if secondary, !modified, config.isBatteryItem { power.toggleLowPower(); return }
+        if secondary || event?.modifierFlags.contains(.control) == true { showMenu(); return }
+        showBoard()
+    }
+    func buildContextMenu() -> NSMenu {
+        let controller = contextMenu ?? SpriteContextMenu(power: power, store: store, config: config,
+            openDashboard: { [weak self] in self?.showBoard() },
+            configure: { [weak self] in guard let self else { return }; self.openEditor(self.config) })
+        contextMenu = controller
+        return controller.menu(for: config)
+    }
+    private func showMenu() {
+        closeBoard()
+        if config.isBatteryItem { power.refreshBatteryStatus() }
+        // NSStatusItem only pops a menu it owns; attach it for this click and take it back after.
+        item.menu = buildContextMenu()
+        item.button?.performClick(nil)
+        item.menu = nil
     }
     @objc func showBoard() {
         if popover?.isShown == true || memoryPanel?.isVisible == true { closeBoard(); return }
@@ -172,7 +244,7 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
             ?? NSRect(x: visible.maxX - 20, y: visible.maxY + 6, width: 1, height: 1)
         let isEnergy = config.processPanelKind == .power
         let height = max(400, min(isEnergy ? 850 : 780, visible.height - 20))
-        let width: CGFloat = isEnergy ? 430 : 350
+        let width: CGFloat = isEnergy ? 430 : 400
         let origin = NSPoint(x: min(max(anchor.midX - width / 2, visible.minX + 8), visible.maxX - width - 8),
                              y: max(visible.minY + 8, anchor.minY - height - 6))
         let panel = MemoryPanel(contentRect: NSRect(origin: origin, size: NSSize(width: width, height: height)),
@@ -185,6 +257,7 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         panel.dismiss = { [weak self] in self?.closeBoard() }
         panel.delegate = self
         let memory = MemoryBoardStore(kind: config.processPanelKind ?? .memory); memoryStore = memory
+        panel.reload = { [weak self, weak memory] in guard let self else { return }; self.store.refresh(); if self.config.enabled { memory?.refresh() } }
         if isEnergy {
             let energy = EnergyBoardController(monitoring: store, processes: memory, power: power, id: config.id,
                 configure: configure, showPower: showPower, close: { [weak self] in self?.closeBoard() })
@@ -200,11 +273,16 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         // works in other apps. Normal popovers still dismiss on outside events.
         if CommandLine.arguments.contains("--energy-validate") || CommandLine.arguments.contains("--memory-validate") { return }
         if let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.closeBoard() }
+            MainActor.assumeIsolated {
+                guard let self, !PanelInteraction.isSuspended, !PanelAnchor.pointerIsOver(self.item.button?.window) else { return }
+                self.closeBoard()
+            }
         }) { panelEventMonitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
             MainActor.assumeIsolated {
-                if let self, event.window !== self.memoryPanel, event.window !== self.item.button?.window { self.closeBoard() }
+                guard !PanelInteraction.isSuspended else { return }
+                if let self, event.window !== self.memoryPanel, event.window !== self.item.button?.window,
+                   !PanelAnchor.pointerIsOver(self.item.button?.window) { self.closeBoard() }
             }
             return event
         }) { panelEventMonitors.append(local) }
@@ -213,6 +291,7 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
             let observer = workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 let activatedPID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
                 MainActor.assumeIsolated {
+                    guard !PanelInteraction.isSuspended else { return }
                     if let activatedPID {
                         if activatedPID == ProcessInfo.processInfo.processIdentifier { return }
                         if NSWorkspace.shared.frontmostApplication?.processIdentifier != activatedPID { return }
@@ -324,7 +403,12 @@ private struct Sparkline: Shape {
 @MainActor
 private final class MemoryPanel: NSPanel {
     var dismiss: (() -> Void)?
+    var reload: (() -> Void)?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     override func cancelOperation(_ sender: Any?) { dismiss?() }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.isReloadShortcut, let reload { reload(); return true }
+        return super.performKeyEquivalent(with: event)
+    }
 }

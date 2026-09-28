@@ -21,6 +21,11 @@ final class MonitoringStore: ObservableObject {
     private var visibleCounts: [String: Int] = [:]
     private var editorIDs: Set<String> = []
     private var boards: Set<UUID> = []
+    /// Readings the hub panel's visible tab needs. The hub has no sprite of its own, so its
+    /// demand is tracked separately and cleared when the panel closes or switches tabs.
+    private var hubMetrics: Set<String> = []
+    private var hubInterval: Double = 2
+    private var surfaceMetrics: [String: (ids: Set<String>, interval: Double)] = [:]
     private(set) var energyHistoryBreaks: [String: [Date]] = [:]
     private let sampler = SystemSampler()
     private let usage: any UsageFetching
@@ -47,7 +52,10 @@ final class MonitoringStore: ObservableObject {
     /// Refresh also runs on window activation; the usage endpoints rate-limit repeated fetches.
     static let aiForceFloor: TimeInterval = 60
 
-    private struct Saved: Codable { var version = 1; var sprites: [SpriteConfiguration]; var cachedMetrics: [Metric]? = nil }
+    /// Version 2 seeded the battery item once. The marker lives in the saved file rather than
+    /// in preferences, so deleting the item keeps it deleted and a test store stays self-contained.
+    private struct Saved: Codable { var version = 2; var sprites: [SpriteConfiguration]; var cachedMetrics: [Metric]? = nil }
+    static let currentConfigurationVersion = 2
 
     init(configurationURL: URL? = nil, usage: any UsageFetching = UsageService.shared,
          spend: (any SpendEstimating)? = nil) {
@@ -82,6 +90,19 @@ final class MonitoringStore: ObservableObject {
     }
     func preview(_ ids: [String]) { editorIDs = Set(ids); schedule() }
     func openBoard(_ id: UUID) { boards.insert(id); schedule() }
+    /// The hub samples only what its visible tab shows; an empty set stops that demand entirely.
+    func setHubMetrics(_ ids: Set<String>, interval: Double = 2) {
+        guard ids != hubMetrics || interval != hubInterval else { return }
+        hubMetrics = ids; hubInterval = interval; schedule()
+    }
+    /// Other surfaces (Dynamic Island pages, its settings preview) register what they show under their
+    /// own name, the same way the hub does; an empty set withdraws that surface's demand.
+    func setSurfaceMetrics(_ owner: String, _ ids: Set<String>, interval: Double = 2) {
+        let current = surfaceMetrics[owner]
+        guard current?.ids != ids || current?.interval != interval else { return }
+        surfaceMetrics[owner] = ids.isEmpty ? nil : (ids, interval)
+        if current != nil || !ids.isEmpty { schedule() }
+    }
     func closeBoard(_ id: UUID) { boards.remove(id); schedule() }
     func suspend() {
         suspended = true; generation += 1; task?.cancel(); task = nil; aiTask?.cancel(); aiTask = nil; isSampling = false
@@ -104,18 +125,31 @@ final class MonitoringStore: ObservableObject {
     }
     func menuText(_ config: SpriteConfiguration) -> String {
         guard config.enabled else { return "Paused" }
-        return menuColumns(config).map { column in
+        return readoutColumns(config, ids: config.metricIDs).map { column in
             return config.showLabels ? "\(column.label) \(column.value)" : column.value
         }.joined(separator: "  ")
     }
+    /// The text columns the menu bar draws. A charge drawn inside the battery glyph is not repeated.
     func menuColumns(_ config: SpriteConfiguration) -> [ReadoutColumn] {
-        config.metricIDs.map { id in
+        readoutColumns(config, ids: config.metricIDs.filter { !(config.drawsChargeInsideBattery && $0 == "battery.charge") })
+    }
+    private func readoutColumns(_ config: SpriteConfiguration, ids: [String]) -> [ReadoutColumn] {
+        ids.map { id in
             let fallback = config.layout == .twoRows && id == "sensor.cpuTemperature" ? "TEMP" : metric(id).shortName
             let label = config.label(for: id, fallback: fallback)
+            // The level bar needs a full scale, so only percentage readings become bars.
+            let percent = config.layout == .bar && metric(id).unit == .percent ? readings[id]?.number : nil
+            let ruleHex = menuColor(id, config: config)
             return ReadoutColumn(label: label, value: display(id, config: config, compact: true),
-                                 colorHex: menuColor(id, config: config))
+                                 colorHex: ruleHex ?? (config.enabled ? percent.flatMap(config.barHex) : nil),
+                                 widthTemplates: MetricFormat.widthTemplates(metric: metric(id), config: config),
+                                 level: percent.map { $0 / 100 })
         }
     }
+
+    /// The last usage snapshot the AI readings were built from, nil until one was fetched. Read-only:
+    /// surfaces that show limits register demand for an `ai.` reading and read the windows here.
+    func usageSnapshot(_ provider: AIProvider) -> UsageSnapshot? { aiSnapshots[provider] }
 
     func usagePace(_ id: String, now: Date = Date()) -> UsagePace? {
         guard let provider = AIUsageMetrics.provider(for: id), let snapshot = aiSnapshots[provider],
@@ -125,6 +159,15 @@ final class MonitoringStore: ObservableObject {
     }
 
     private func menuColor(_ id: String, config: SpriteConfiguration) -> String? {
+        if config.enabled, config.colorRule == .networkDirection {
+            switch id { case "network.upload": return "FF9F0A"; case "network.download": return "30D158"; default: return nil }
+        }
+        if config.enabled, config.colorRule == .memoryPressure {
+            return id.hasPrefix("memory.") ? SpriteColorRule.memoryPressureHex(readings["memory.pressure"]?.text) : nil
+        }
+        if config.enabled, config.colorRule == .powerDraw {
+            return metric(id).unit == .watts ? SpriteColorRule.powerDrawHex(readings[id]?.number) : nil
+        }
         guard config.enabled, config.colorRule.usesUsagePace,
               metric(id).group == .ai, metric(id).unit == .percent else { return nil }
         switch usagePace(id)?.level {
@@ -188,10 +231,14 @@ final class MonitoringStore: ObservableObject {
         do {
             let data = try Data(contentsOf: configurationURL)
             let saved = try JSONDecoder().decode(Saved.self, from: data)
-            guard saved.version == 1 else { throw CocoaError(.fileReadCorruptFile) }
+            guard (1...Self.currentConfigurationVersion).contains(saved.version) else { throw CocoaError(.fileReadCorruptFile) }
             mergeCatalog(saved.cachedMetrics ?? [])
             var ids: Set<UUID> = []
             sprites = saved.sprites.filter { ids.insert($0.id).inserted }.map { config in var value = config; value.normalize(); return value }
+            if saved.version < 2 {
+                if !sprites.contains(where: \.isBatteryItem) { sprites.append(.battery) }
+                persist()
+            }
         } catch {
             // Preserve the original bytes before allowing an edit to replace corrupt state.
             let backup = configurationURL.deletingPathExtension().appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970)).json")
@@ -202,6 +249,26 @@ final class MonitoringStore: ObservableObject {
             sprites = []
         }
     }
+    /// The battery drawn in the menu bar, from the same readings the boards use.
+    /// An unread charge draws an empty shell; nothing is estimated.
+    /// The glyph for a battery item, carrying its charge inside when the sprite asks for that.
+    func batteryGlyph(ceiling: Int?, for config: SpriteConfiguration) -> BatteryGlyph {
+        var glyph = batteryGlyph(ceiling: ceiling)
+        glyph.percentInside = config.enabled && config.drawsChargeInsideBattery
+        return glyph
+    }
+    func batteryGlyph(ceiling: Int?) -> BatteryGlyph {
+        let percent = readings["battery.charge"]?.number
+        let state = readings["battery.state"]?.text
+        let onBattery = state == "On battery"
+        return BatteryGlyph(percent: percent,
+                            charging: state == "Charging",
+                            ceiling: ceiling,
+                            alertHex: onBattery && (percent ?? 100) <= 10 ? "FF6B5E" : nil,
+                            activity: BatteryActivity(state: state, amps: readings["battery.current"]?.number),
+                            lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    }
+
     private var savingBlocked = false
     private func persist() {
         guard !savingBlocked else { return }
@@ -237,11 +304,16 @@ final class MonitoringStore: ObservableObject {
     private func demand() -> [String: Double] {
         var result: [String: Double] = [:]
         for config in sprites where config.enabled {
-            let ids = config.processPanelKind == .power ? config.metricIDs + ["battery.charge", "battery.temperature"] : config.metricIDs
+            var ids = config.processPanelKind == .power ? config.metricIDs + ["battery.charge", "battery.temperature"] : config.metricIDs
+            if config.colorRule == .memoryPressure { ids.append("memory.pressure") }
             for id in ids { result[id] = min(result[id] ?? 60, config.interval) }
         }
         if libraryOpen {
             for id in Set(visibleCounts.keys).union(editorIDs) { result[id] = min(result[id] ?? 60, 2) }
+        }
+        for id in hubMetrics { result[id] = min(result[id] ?? 60, hubInterval) }
+        for entry in surfaceMetrics.values {
+            for id in entry.ids { result[id] = min(result[id] ?? 60, entry.interval) }
         }
         for id in boards {
             guard let config = sprites.first(where: { $0.id == id }), config.enabled else { continue }
@@ -251,6 +323,7 @@ final class MonitoringStore: ObservableObject {
         return result
     }
     var requestedMetricCount: Int { demand().count }
+    var requestedHubMetricsForValidation: Set<String> { hubMetrics }
     var fastestInterval: Double? { demand().values.min() }
 
     private func schedule(immediate: Bool = false) {

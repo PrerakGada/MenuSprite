@@ -133,7 +133,8 @@ func liveSourceProbe() async throws {
     let layout = StackedReadout.layout(columns:columns,config:config,height:24)
     #expect(layout.iconRect == .zero)
     #expect(withIcon.size.width - layout.size.width == 19)
-    #expect(layout.valueFont.pointSize == 14)
+    // A label above the value costs the value 1.5 pt, and nothing else shrinks it further.
+    #expect(layout.valueFont.pointSize == 12.5)
     #expect(!StackedReadout.image(columns:columns,config:config,height:24).isTemplate)
     let restored = try JSONDecoder().decode(SpriteConfiguration.self,from:JSONEncoder().encode(config))
     #expect(!restored.showIcon)
@@ -167,4 +168,74 @@ func liveSourceProbe() async throws {
     #expect(three.columns[2].value.minX > three.columns[0].value.maxX)
     let restored = try JSONDecoder().decode(SpriteConfiguration.self, from: JSONEncoder().encode(config))
     #expect(restored.layout == .twoRows)
+}
+
+@Test @MainActor func menuBarWidthHoldsWhileValuesChange() throws {
+    let percent = try #require(MonitoringCatalog.base.first { $0.id == "cpu.usage" })
+    let download = try #require(MonitoringCatalog.base.first { $0.id == "network.download" })
+    let power = try #require(MonitoringCatalog.base.first { $0.id == "sensor.PSTR" })
+    let temperature = try #require(MonitoringCatalog.base.first { $0.id == "sensor.cpuTemperature" })
+    // A menu-bar number never runs past three characters: the decimal goes once the whole part needs it.
+    var config = SpriteConfiguration(); config.decimals = 1
+    #expect(MetricFormat.string(Reading(95.42 * 1024), metric: download, config: config, compact: true) == "95.4 KiB/s")
+    #expect(MetricFormat.string(Reading(100.4 * 1024), metric: download, config: config, compact: true) == "100 KiB/s")
+    #expect(MetricFormat.string(Reading(99.97 * 1024), metric: download, config: config, compact: true) == "100 KiB/s")
+    #expect(MetricFormat.string(Reading(99.8), metric: temperature, config: config, compact: true) == "99.8°C")
+    #expect(MetricFormat.string(Reading(101.2), metric: temperature, config: config, compact: true) == "101°C")
+    #expect(MetricFormat.string(Reading(121.6), metric: power, config: config, compact: true) == "122 W")
+    // Panels keep the precision that was asked for.
+    #expect(MetricFormat.string(Reading(121.64), metric: power, config: config) == "121.6 W")
+    // Units step up at 1000, so no value needs a fourth whole digit.
+    #expect(MetricFormat.string(Reading(1010 * 1024), metric: download) == "1.0 MiB/s")
+
+    for layout in SpriteReadoutLayout.allCases {
+        var config = SpriteConfiguration(); config.layout = layout; config.showIcon = false; config.decimals = 1
+        func width(_ values: [(Metric, String)]) -> CGFloat {
+            StackedReadout.layout(columns: values.map { ReadoutColumn(label: "X", value: $0.1,
+                widthTemplates: MetricFormat.widthTemplates(metric: $0.0, config: config)) }, config: config, height: 24).size.width
+        }
+        // Digit count, unit letters and ink shape all vary; the item width must not.
+        let widths = [
+            width([(percent, "9%"), (download, "0 B/s")]), width([(percent, "99%"), (download, "999 KiB/s")]),
+            width([(percent, "11%"), (download, "11.1 KiB/s")]), width([(percent, "88%"), (download, "88.8 MiB/s")]),
+        ]
+        #expect(Set(widths).count == 1, "\(layout): \(widths)")
+        #expect(width([(power, "8.1 W")]) == width([(power, "88.8 W")]))
+        // The reservations are deliberately tight: at whole numbers — how CPU, RAM and power are
+        // actually shown — 100% and a 100 W draw are rare enough to widen the item for.
+        config.decimals = 0
+        #expect(width([(percent, "100%")]) > width([(percent, "99%")]))
+        #expect(width([(power, "122 W")]) > width([(power, "99 W")]))
+        config.decimals = 1
+    }
+    // Once a value has needed more room, passing the reserved widths back keeps it.
+    config.layout = .stacked
+    let wide = StackedReadout.layout(columns: [.init(label: "P", value: "122 W")], config: config, height: 24)
+    let after = StackedReadout.layout(columns: [.init(label: "P", value: "8.0 W")], config: config, height: 24, reserved: wide.valueWidths)
+    #expect(after.size.width == wide.size.width)
+}
+
+@Test @MainActor func stackedLabelsGrowWithoutWideningTheItem() throws {
+    let percent = try #require(MonitoringCatalog.base.first { $0.id == "cpu.usage" })
+    var config = SpriteConfiguration(); config.layout = .stacked; config.showIcon = false; config.fontSize = 14
+    func placed(_ label: String, _ value: String) -> StackedReadout.Layout {
+        StackedReadout.layout(columns: [ReadoutColumn(label: label, value: value,
+            widthTemplates: MetricFormat.widthTemplates(metric: percent, config: config))],
+            config: config, height: NSStatusBar.system.thickness)
+    }
+    let cpu = placed("CPU", "13%")
+    // The label is readable and the value gives up a point and a half for it.
+    #expect(cpu.labelFont.pointSize == 8.5)
+    #expect(cpu.valueFont.pointSize == 12.5)
+    // Both rows still fit the bar.
+    #expect(cpu.columns[0].value.minY >= 0)
+    #expect((cpu.columns[0].label?.maxY ?? 0) <= NSStatusBar.system.thickness)
+    // Narrower than the old 14 pt value with its 6.5 pt label.
+    var old = config; old.fontSize = 15.5
+    #expect(cpu.size.width < StackedReadout.layout(columns: [.init(label: "CPU", value: "13%")], config: old,
+                                                  height: NSStatusBar.system.thickness).size.width)
+    // A long label takes only the room the number already needed; it never pushes the item wider.
+    let claude = placed("Claude", "49%")
+    #expect(claude.labelFont.pointSize < cpu.labelFont.pointSize)
+    #expect(claude.size.width == cpu.size.width)
 }

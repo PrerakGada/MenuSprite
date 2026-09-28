@@ -60,22 +60,47 @@ public struct HistoryPoint: Codable, Sendable {
 }
 
 public enum SpriteReadoutLayout: String, Codable, CaseIterable, Sendable {
-    case inline, stacked, twoRows
+    case inline, stacked, twoRows, bar
     public var title: String {
-        switch self { case .inline: "Inline labels"; case .stacked: "Labels above values"; case .twoRows: "Two rows" }
+        switch self {
+        case .inline: "Inline labels"; case .stacked: "Labels above values"; case .twoRows: "Two rows"
+        case .bar: "Level bar"
+        }
+    }
+}
+
+/// Where a battery item shows its charge: drawn inside the battery glyph, or as text beside it.
+public enum BatteryPercentPlacement: String, Codable, CaseIterable, Sendable {
+    case inside, left, right
+    public var title: String {
+        switch self { case .inside: "Inside"; case .left: "Left"; case .right: "Right" }
     }
 }
 
 public enum SpriteColorRule: String, Codable, CaseIterable, Sendable {
-    case fixed, usagePace, usagePacePercent
+    case fixed, usagePace, usagePacePercent, networkDirection, memoryPressure, powerDraw
     public var title: String {
         switch self {
         case .fixed: "Fixed color"
         case .usagePace: "AI usage pace"
         case .usagePacePercent: "AI usage pace (% only)"
+        case .networkDirection: "Network: upload orange, download green"
+        case .memoryPressure: "Memory pressure: label green, yellow, red"
+        case .powerDraw: "Power draw label: yellow from 35 W, red above 45 W"
         }
     }
-    public var usesUsagePace: Bool { self != .fixed }
+    /// The kernel's pressure level (the `memory.pressure` text) as a menu-bar color.
+    /// An unreported level returns nil so the text keeps its own color rather than a guessed state.
+    public static func memoryPressureHex(_ level: String?) -> String? {
+        switch level { case "Normal": "30D158"; case "Warning": "FFD60A"; case "Critical": "FF453A"; default: nil }
+    }
+    /// A watts reading as a menu-bar color: its own text color below 35 W, yellow from 35 W to 45 W,
+    /// red above 45 W. A missing reading returns nil rather than a guessed level.
+    public static func powerDrawHex(_ watts: Double?) -> String? {
+        guard let watts, watts.isFinite, watts >= 35 else { return nil }
+        return watts > 45 ? "FF453A" : "FFD60A"
+    }
+    public var usesUsagePace: Bool { self == .usagePace || self == .usagePacePercent }
 }
 
 public struct SpriteConfiguration: Identifiable, Codable, Sendable, Equatable {
@@ -103,6 +128,22 @@ public struct SpriteConfiguration: Identifiable, Codable, Sendable, Equatable {
         set { menuBarIconColor = newValue }
     }
     private var readoutColorRule: SpriteColorRule?
+    /// Level-bar thresholds in percent: the fill turns amber above `barWarning` and red above
+    /// `barAlert`. Optional so configurations saved before the bar existed still decode.
+    private var levelBarWarning: Int?
+    private var levelBarAlert: Int?
+    public var barWarning: Int {
+        get { levelBarWarning ?? 60 }
+        set { levelBarWarning = newValue }
+    }
+    public var barAlert: Int {
+        get { levelBarAlert ?? 85 }
+        set { levelBarAlert = newValue }
+    }
+    /// The level bar's fill color for a percentage, or nil while it is below the warning line.
+    public func barHex(percent: Double) -> String? {
+        percent > Double(barAlert) ? "FF453A" : percent > Double(barWarning) ? "FFD60A" : nil
+    }
     /// Optional labels keep older configurations unchanged and allow personal readout names.
     private var readoutLabels: [String: String]?
     public func label(for metricID: String, fallback: String) -> String {
@@ -122,6 +163,21 @@ public struct SpriteConfiguration: Identifiable, Codable, Sendable, Equatable {
         get { menuBarIconVisible ?? true }
         set { menuBarIconVisible = newValue }
     }
+    private var batteryPercentPosition: BatteryPercentPlacement?
+    /// Battery items only. Unset configurations draw the charge inside the glyph.
+    public var batteryPercentPlacement: BatteryPercentPlacement {
+        get { batteryPercentPosition ?? .inside }
+        set { batteryPercentPosition = newValue }
+    }
+    /// The charge is drawn by the battery glyph itself, so it is not also a text column.
+    public var drawsChargeInsideBattery: Bool {
+        isBatteryItem && showIcon && batteryPercentPlacement == .inside && metricIDs.contains("battery.charge")
+    }
+    /// The icon follows the readings instead of leading them.
+    public var iconTrailing: Bool { isBatteryItem && showIcon && batteryPercentPlacement == .left }
+    /// A sprite made only of battery readings draws the live battery glyph and
+    /// carries the charge-control menu on secondary click.
+    public var isBatteryItem: Bool { !metricIDs.isEmpty && metricIDs.allSatisfy { $0.hasPrefix("battery.") } }
     public var layout: SpriteReadoutLayout {
         get { readoutLayout ?? .inline }
         set { readoutLayout = newValue }
@@ -146,6 +202,8 @@ public struct SpriteConfiguration: Identifiable, Codable, Sendable, Equatable {
         fontSize = fontSize.isFinite ? min(16, max(10, fontSize)) : 12
         decimals = min(2, max(0, decimals))
         if readoutLayout == nil { readoutLayout = .inline }
+        barWarning = min(95, max(5, barWarning))
+        barAlert = min(100, max(barWarning + 5, barAlert))
         if menuBarIconVisible == nil { menuBarIconVisible = true }
         if colorHex != "auto" && (colorHex.count != 6 || UInt32(colorHex, radix: 16) == nil) { colorHex = "auto" }
         if iconColorHex != "text" && iconColorHex != "auto" && (iconColorHex.count != 6 || UInt32(iconColorHex, radix: 16) == nil) { iconColorHex = "text" }
@@ -159,9 +217,21 @@ public struct SpriteConfiguration: Identifiable, Codable, Sendable, Equatable {
             if metrics.contains("sensor.fanSpeed") {
                 item.symbol = "fan.fill"; item.showIcon = true; item.iconColorHex = "79BFFA"
             }
+            if metrics.contains("network.upload") { item.colorRule = .networkDirection }
+            if metrics == ["memory.usage"] { item.colorRule = .memoryPressure }
+            if metrics == ["sensor.PSTR"] { item.colorRule = .powerDraw }
             item.layout = metrics.count == 1 ? .stacked : .twoRows
             return item
-        }
+        } + [battery]
+    }
+
+    /// The battery item: the drawn glyph beside the charge, with the charge-control
+    /// menu on secondary click. Seeded once for configurations saved before it existed.
+    public static var battery: Self {
+        var item = Self(name: "Battery", symbol: "battery.100percent", metricIDs: ["battery.charge"])
+        item.showIcon = true; item.showLabels = false; item.bold = false
+        item.fontSize = 12; item.layout = .inline; item.interval = 10
+        return item
     }
 }
 
@@ -171,8 +241,20 @@ public enum MetricFormat {
         if let text = reading.text { return text }
         guard let value = reading.number else { return compact ? "—" : (reading.issue ?? "Unavailable") }
         let suffix = config.showUnits
+        // In the menu bar a number never runs past three characters: the decimal is dropped once the
+        // whole part needs the room ("95.4 KB/s" then "100 KB/s"). Panels keep the asked-for precision.
+        func fitted(_ v: Double, _ digits: Int) -> Int {
+            guard compact else { return digits }
+            var digits = digits
+            while digits > 0 {
+                let step = pow(10.0, Double(digits))
+                if abs((v * step).rounded() / step) < pow(10.0, Double(MetricFormat.compactDigits - digits)) { break }
+                digits -= 1
+            }
+            return digits
+        }
         func n(_ v: Double, _ digits: Int? = nil) -> String {
-            String(format: "%.*f", locale: Locale(identifier: "en_US_POSIX"), digits ?? config.decimals, v)
+            String(format: "%.*f", locale: Locale(identifier: "en_US_POSIX"), fitted(v, digits ?? config.decimals), v)
         }
         switch metric.unit {
         case .percent: return n(value) + (suffix ? "%" : "")
@@ -181,7 +263,8 @@ public enum MetricFormat {
             let base = bits ? 1000.0 : 1024.0
             let units = bits ? ["b/s", "Kb/s", "Mb/s", "Gb/s", "Tb/s"] : (metric.unit == .bytes ? ["B", "KiB", "MiB", "GiB", "TiB"] : ["B/s", "KiB/s", "MiB/s", "GiB/s", "TiB/s"])
             var size = abs(value) * (bits ? 8 : 1); var index = 0
-            while size >= base && index < units.count - 1 { size /= base; index += 1 }
+            // Step up at 1000, not 1024, so a value never needs a fourth integer digit ("1010.0 KiB/s").
+            while size >= 1000 && index < units.count - 1 { size /= base; index += 1 }
             let digits = index == 0 ? 0 : max(1, config.decimals)
             return (value < 0 ? "−" : "") + n(size, digits) + (suffix ? " " + units[index] : "")
         case .celsius: return n(config.fahrenheit ? value * 1.8 + 32 : value) + (suffix ? (config.fahrenheit ? "°F" : "°C") : "")
@@ -199,6 +282,49 @@ public enum MetricFormat {
             if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m" }
             return "\(minutes)m"
         case .text: return n(value)
+        }
+    }
+}
+
+extension MetricFormat {
+    /// No menu-bar number is given room for more than this many characters.
+    public static let compactDigits = 3
+
+    /// The widest strings `string(_:metric:config:compact:)` produces in normal use, with every
+    /// digit as "0" (digits are tabular). The menu bar reserves this width so an item does not
+    /// resize as its value moves. Anything rarer than the reservation — 100% CPU, a 100 W draw, a
+    /// GiB/s transfer — widens the item while it lasts, which is cheaper than holding the room all
+    /// day. Empty means the width cannot be predicted.
+    public static func widthTemplates(metric: Metric, config: SpriteConfiguration = .init()) -> [String] {
+        let suffix = config.showUnits
+        /// `integers` whole digits, with the decimals that still fit in three characters.
+        func room(_ integers: Int, _ decimals: Int? = nil) -> String {
+            let places = max(0, min(decimals ?? config.decimals, compactDigits - integers))
+            return String(repeating: "0", count: integers) + (places > 0 ? "." + String(repeating: "0", count: places) : "")
+        }
+        switch metric.unit {
+        // CPU and memory sit at 99% or below almost always, so two digits are reserved.
+        case .percent: return [room(2) + (suffix ? "%" : "")]
+        case .bytes, .bytesPerSecond:
+            let bits = metric.unit == .bytesPerSecond && config.networkBits && metric.group == .network
+            let units = bits ? ["b/s", "Kb/s", "Mb/s"] : (metric.unit == .bytes ? ["B", "KiB", "MiB", "GiB"] : ["B/s", "KiB/s", "MiB/s"])
+            return units.enumerated().flatMap { index, unit -> [String] in
+                let value = index == 0 ? [room(3, 0)] : [room(2, max(1, config.decimals)), room(3, 0)]
+                return value.map { $0 + (suffix ? " " + unit : "") }
+            }
+        case .celsius:
+            let unit = suffix ? (config.fahrenheit ? "°F" : "°C") : ""
+            return [room(2) + unit, room(3, 0) + unit]
+        // Nebula draws well under 100 W; a spike past it widens the item for as long as it lasts.
+        case .watts: return [room(2) + (suffix ? " W" : "")]
+        case .volts: return [room(2, max(2, config.decimals)) + (suffix ? " V" : "")]
+        case .amps: return ["−" + room(1, max(2, config.decimals)) + (suffix ? " A" : "")]
+        case .rpm: return [room(4, 0) + (suffix ? " rpm" : "")]
+        case .count: return metric.id.hasPrefix("cpu.load") ? [room(1, 2)] : []
+        case .dollars: return [(suffix ? "$" : "") + room(1, 2), (suffix ? "$" : "") + room(3, 0)]
+        case .perSecond: return [room(3, 0) + (suffix ? "/s" : "")]
+        case .seconds: return ["00h 00m", "0d 00h"]
+        case .text: return []
         }
     }
 }

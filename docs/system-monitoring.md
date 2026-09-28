@@ -12,8 +12,11 @@ separate CPU, RAM and PWR sprites, with small labels above heavy white values an
 no readout glyphs. Network is one two-row item (upload above download). Fan & CPU
 temperature is another two-row item (highest reported fan RPM above CPU temperature). PWR uses actual PSTR system power. The main app icon stays available.
 
-1. Find a reading by name/category. Advanced includes individual cores, interfaces
-   and firmware keys.
+1. Open its category card (CPU, Memory, Network…) or search. A closed card shows only its
+   headline figure and samples nothing else; an open card lists the everyday readings,
+   with individual cores, interfaces and firmware keys folded into **More … readings**
+   inside the same card (large sets split by kind: Temperature, Power, en0…). Search
+   covers everything, detailed readings included, and opens the matching cards.
 2. Click its **+** and choose **New sprite with this reading…** or an existing sprite.
 3. Configure name, icon, selected readings/order, refresh interval, text size/weight,
    color, Show icon in menu bar, labels, units, decimal places, Celsius/Fahrenheit and network bytes/bits.
@@ -84,16 +87,16 @@ the app displays its current count. See `monitoring-validation.md` for the measu
   are accepted. Zero/inactive temperature slots are excluded; a stopped fan can
   legitimately report zero RPM. No key is written.
 
-Unavailable, warming and failed readings show text/`—`, never a made-up zero. Each
-library row expands to its meaning, source and last sample time. Histories contain
+Unavailable, warming and failed readings show text/`—`, never a made-up zero. Hovering a
+library row shows its meaning, source and last sample time. Histories contain
 only actual samples and are bounded to 60 per reading, in memory only.
 
 ## Native implementation and persistence
 
 One actor owns the samplers. A shared scheduler chooses the fastest requested
 interval per source group; visible catalog rows and editor/board previews add demand.
-The catalog discovers interface names and firmware readings when opened, so Advanced
-search works before visiting a specific category. Interface discovery does not prime
+The catalog discovers interface names and firmware readings when opened, so search
+of detailed readings works before visiting a specific category. Interface discovery does not prime
 or reset the traffic-rate counters.
 It stops when demand is empty, clears deltas on stop/sleep, and releases unused SMC
 connections. Menu items do not render faster than their own configured interval;
