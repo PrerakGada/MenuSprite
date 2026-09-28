@@ -43,6 +43,19 @@ public actor SpendService: SpendEstimating {
                                        now: now(), partial: scans[provider] != nil)
     }
 
+    /// What the last scan left in memory, per local day and model, without ever starting a scan. For
+    /// surfaces that must not treat being opened as consent to read the logs.
+    public func cachedHistory(_ provider: AIProvider) -> SpendHistory? {
+        let aggregate = aggregates[provider]
+        guard let scannedAt = aggregate.scannedAt else { return nil }
+        let today = SpendLogScanner.dayNumber(now(), calendar: calendar) ?? 0
+        let days = aggregate.days.compactMap { totals -> SpendHistory.Day? in
+            let ago = Int(today) - Int(totals.day)
+            return ago >= 0 ? SpendHistory.Day(daysAgo: ago, models: totals.models) : nil
+        }
+        return SpendHistory(days: days, scannedAt: Date(timeIntervalSince1970: scannedAt))
+    }
+
     /// Awaits a full pass. Used by tests and the opt-in live measurement, never by the UI.
     @discardableResult
     public func scanNow(_ provider: AIProvider) async -> SpendSummary? {
@@ -79,4 +92,16 @@ public actor SpendService: SpendEstimating {
         // the result away, and left a caller that had awaited the scan looking at no file at all.
         try? SpendSummaryStore.save(aggregates, to: paths.summaryFile)
     }
+}
+
+/// A provider's cached per-day, per-model tokens, as `SpendService.cachedHistory` reads them.
+public struct SpendHistory: Sendable, Equatable {
+    public struct Day: Sendable, Equatable {
+        /// 0 is today, 1 yesterday.
+        public let daysAgo: Int
+        public let models: [String: TokenBreakdown]
+    }
+
+    public let days: [Day]
+    public let scannedAt: Date
 }

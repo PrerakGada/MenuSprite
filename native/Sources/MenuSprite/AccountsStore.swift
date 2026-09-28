@@ -41,16 +41,28 @@ final class AccountsStore: ObservableObject {
     @Published private(set) var busy: Set<AIProvider> = []
     @Published private(set) var signingIn: Set<AIProvider> = []
     @Published private(set) var isLoading = false
+    /// True only while account usage is being asked for; spend scanning can run on for minutes after.
+    @Published private(set) var isLoadingUsage = false
+    /// Counts reload requests, so a validation run can tell a ⌘R reached the store.
+    private(set) var reloadRequests = 0
     @Published private(set) var claudeSwitcherRunning = false
     @Published private(set) var autoSwitchStatus: [AIProvider: String] = [:]
     @Published var message: String?
+    /// When the board last finished asking for usage, and when it will ask again while it stays open.
+    @Published private(set) var lastReloadAt: Date?
+    @Published private(set) var nextReloadAt: Date?
+    @Published private(set) var refreshInterval: TimeInterval = UsageRefreshInterval.current
     private(set) var isOpen = false
+    /// The board can be on screen twice at once — its own panel and the hub's AI tab — so openings
+    /// are counted and the usage data is released only when the last viewer goes away.
+    private var openCount = 0
 
     let switcher: AccountSwitcher
     private let usageSource: any UsageFetching
     private let spendSource: (any SpendEstimating)?
     private let didSwitch: (AIProvider) -> Void
     private var loadTask: Task<Void, Never>?
+    private var autoReloadTask: Task<Void, Never>?
     private var autoSwitchTask: Task<Void, Never>?
     private var signInTasks: [AIProvider: Task<Void, Never>] = [:]
     private var lastAutoAttempt: [AIProvider: Date] = [:]
@@ -78,16 +90,23 @@ final class AccountsStore: ObservableObject {
     }
 
     func opened() {
+        openCount += 1
         isOpen = true
         reload(force: false)
     }
 
     /// Releases usage and cancels loading; the auto-switch loop keeps its own schedule.
     func closed() {
+        openCount = max(0, openCount - 1)
+        guard openCount == 0 else { return }
         isOpen = false
         loadTask?.cancel()
         loadTask = nil
+        autoReloadTask?.cancel()
+        autoReloadTask = nil
+        nextReloadAt = nil
         isLoading = false
+        isLoadingUsage = false
         usage = [:]
         spend = [:]
         message = nil
@@ -95,7 +114,9 @@ final class AccountsStore: ObservableObject {
 
     func reload(force: Bool) {
         loadTask?.cancel()
+        reloadRequests += 1
         isLoading = true
+        isLoadingUsage = true
         claudeSwitcherRunning = Self.claudeSwitcherIsRunning()
         let switcher = self.switcher
         let source = usageSource
@@ -122,6 +143,10 @@ final class AccountsStore: ObservableObject {
                 }
                 for await (id, state) in group where !Task.isCancelled { usage[id] = state }
             }
+            guard !Task.isCancelled else { return }
+            isLoadingUsage = false
+            lastReloadAt = Date()
+            scheduleAutoReload()
             // Scanned from local logs on its own schedule, so it never delays the account rows — and
             // only once Prerak has turned it on, because the first pass is minutes of parsing.
             if let source = self.spendSource, SpendPreference.isEnabled {
@@ -130,6 +155,47 @@ final class AccountsStore: ObservableObject {
                 }
             }
             if !Task.isCancelled { isLoading = false }
+        }
+    }
+
+    /// The oldest usage figure on the board, so "updated" never claims fresher data than is shown.
+    var dataUpdatedAt: Date? {
+        usage.values.compactMap { state -> Date? in
+            if case .loaded(let snapshot) = state { return snapshot.fetchedAt }
+            return nil
+        }.min()
+    }
+
+    func setRefreshInterval(_ seconds: TimeInterval) {
+        guard UsageRefreshInterval.options.contains(seconds), seconds != refreshInterval else { return }
+        UsageRefreshInterval.current = seconds
+        refreshInterval = seconds
+        if isOpen { scheduleAutoReload() }
+    }
+
+    /// While the board is open, ask again as soon as the first figure on it goes stale. A figure the
+    /// service kept serving past its interval (a rate-limit cooldown) would make that moment already
+    /// past, so the board then waits one whole interval rather than asking every second.
+    private func scheduleAutoReload() {
+        autoReloadTask?.cancel()
+        guard isOpen else { nextReloadAt = nil; return }
+        let now = Date()
+        let interval = refreshInterval
+        let expiries = usage.values.compactMap { state -> Date? in
+            if case .loaded(let snapshot) = state { return snapshot.fetchedAt.addingTimeInterval(interval) }
+            return nil
+        }
+        var next = expiries.min() ?? now.addingTimeInterval(interval)
+        if next < now.addingTimeInterval(2) {
+            next = (lastReloadAt ?? now).addingTimeInterval(interval)
+            if next < now.addingTimeInterval(2) { next = now.addingTimeInterval(2) }
+        }
+        nextReloadAt = next
+        autoReloadTask = Task { [weak self] in
+            // A second past the moment, so the service's own cache (stamped just after the fetch) has expired too.
+            try? await Task.sleep(for: .milliseconds(Int(max(0, next.timeIntervalSinceNow + 1) * 1000)))
+            guard !Task.isCancelled, let self, self.isOpen else { return }
+            self.reload(force: false)
         }
     }
 
@@ -286,6 +352,8 @@ final class AccountsStore: ObservableObject {
     }
 
     func stop() {
+        autoReloadTask?.cancel()
+        autoReloadTask = nil
         autoSwitchTask?.cancel()
         autoSwitchTask = nil
         loadTask?.cancel()

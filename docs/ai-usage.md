@@ -135,8 +135,22 @@ suffix colors together, white bold usage numbers and restored normal-weight othe
 - AI usage runs in its own task, apart from the local sampler, so a slow response never
   delays CPU, memory or power readings.
 - The live login is checked at most every 30 seconds (Claude Code's own keychain cache
-  lifetime). The network is used at most every 5 minutes per login; shorter sprite
-  intervals only re-render cached values and the reset countdowns.
+  lifetime). The network is used at most once per **refresh interval** per login — 5
+  minutes unless changed; shorter sprite intervals only re-render cached values and the
+  reset countdowns.
+- **The refresh interval is chosen in the AI Accounts board** (15 September): 1, 2, 5, 10,
+  15 or 30 minutes, saved as `MenuSprite.AIUsageRefreshSeconds`. The board and the
+  menu-bar readings follow the same value, and a change applies to the snapshot already
+  cached, not only to the next fetch. Below 5 minutes is Prerak's call against the Claude
+  endpoint's rate limit; a 429 still becomes a cooldown with the last good values shown.
+  Cooldowns and the 60-second connection retry keep their own fixed lengths.
+- **While the board is open it reloads on its own** as soon as the first figure on it
+  reaches the interval, and shows *Updated … ago* (the oldest figure on the board, never
+  the time of the request) and a *Next in m:ss* countdown. The countdown redraws once a
+  second only while the board is visible; closing it cancels the scheduled reload.
+  **⌘R reloads the open board** (standalone panel and the hub's AI tab; also the hub's
+  other tabs and the CPU/RAM/Power panels) — these borderless panels have no menu, so
+  each panel answers the shortcut itself.
 - A changed login — an account switch, or a CLI rotating its own token — is detected by
   the token fingerprint and fetched immediately, so readings follow a switch within about
   30 seconds without waiting for the 5-minute interval.
@@ -152,7 +166,29 @@ suffix colors together, white bold usage numbers and restored normal-weight othe
 
 ## Token rotation
 
-Like OpenUsage, an access token within 5 minutes of expiry — or rejected with 401/403 —
+**The login the Claude Code and Codex CLIs are signed in with is read-only.** MenuSprite reads
+its access token and uses it as is. It never refreshes it and never writes it back — to the
+keychain item or to `~/.codex/auth.json`. Changed 21 September 2026 after a failed write-back
+left Claude Code signed out: a refresh token is single-use, so refreshing it and then failing
+to store the new pair leaves the CLI holding a dead one; and an item MenuSprite creates in the
+keychain is locked to MenuSprite's team, which makes every other tool that reads it (Claude
+Code's `security` calls) show a keychain password prompt each time.
+
+- The live Claude login is **read through `/usr/bin/security`**, not the Security framework. Claude
+  Code writes that item with the `apple-tool:` partition, so a direct read from MenuSprite (team
+  partition) is a mismatch and macOS shows a keychain password dialog on every read, even with
+  `kSecUseAuthenticationUIFail` set (seen 21 Sep 2026, macOS 27). The tool's read matches and is
+  silent; it is the same call Claude Code makes.
+- A live token that is already expired is reported as `awaitingCLIRenewal` with no network
+  request: "Login token expired. The CLI renews it the next time it runs." The board keeps its
+  last figures with that notice and reads the login again on every refresh, so it picks up the
+  CLI's renewed token as soon as one exists.
+- A live token the provider rejects with 401/403 gets the same answer after that one usage
+  request; the refresh token is never spent.
+- A live token within 5 minutes of expiry but still valid is simply used.
+
+Only a **saved copy of an account the CLI is not using** is rotated, and only into its own saved
+copy, as OpenUsage does — an access token within 5 minutes of expiry, or rejected with 401/403,
 is refreshed once:
 
 - Claude: `POST https://platform.claude.com/v1/oauth/token` (JSON, Claude Code's client ID
@@ -161,19 +197,17 @@ is refreshed once:
   `POST https://auth.openai.com/oauth/token` (form, Codex's client ID).
   `refresh_token_expired/reused/invalidated` → "Session expired".
 
-Claude Code, the Codex CLI and OpenUsage refresh the same live logins, so a rejected refresh
-is only reported as an expired session when the store still holds the pair MenuSprite read.
-If another client rotated it first (spending that refresh token), MenuSprite reloads and uses
-the winner's login instead.
+A saved copy's rejected refresh is only reported as an expired session when the saved item still
+holds the pair MenuSprite read; if something else rotated it first, MenuSprite reloads that copy.
 
 The rotated pair is written back only inside the shared credential gate, and only if the
-store still holds the exact pair that was refreshed. If Claude Code, Codex or a switch
-changed it meanwhile, the write is dropped and the new login is read instead. Live
-Claude writes use `security -i` over stdin for short commands and the Security framework
-for larger payloads; tokens never enter process arguments. Provider HTTP redirects are
+saved item still holds the exact pair that was refreshed. If a switch changed it meanwhile,
+the write is dropped and the new copy is read instead. Saved-copy writes use `security -i`
+over stdin for short commands and the Security framework for larger payloads; tokens never
+enter process arguments. Provider HTTP redirects are
 refused, including redirects carrying refresh bodies. Saved copies keep
-their existing account attribute; `auth.json` is replaced atomically with mode 0600.
-Every key MenuSprite does not model (such as `mcpOAuth`) is preserved.
+their existing account attribute. Every key MenuSprite does not model (such as `mcpOAuth`) is
+preserved.
 
 `savedUsage` for the account the CLI is currently using always reads the **live** login:
 the saved copy of the active account can hold a refresh token the CLI already rotated,
@@ -182,12 +216,12 @@ and spending it could revoke the live session.
 ## What was verified
 
 - `swift test --package-path native --filter AIAccountsTests`: mapping fixtures shaped like
-  live responses, header/URL/body contracts, 401 → refresh → retry, `invalid_grant`,
-  429 cooldown with last-good values, compare-and-swap write-back when the store changes
-  mid-refresh, saved versus live write targets, unknown-key preservation, Codex window
-  classification including a sole weekly window in the primary slot, connection failure
-  retry cadence, request coalescing, and a refresh that loses the race to another client
-  reloading that client's login for both providers (`UsageRaceTests`). All network and
+  live responses, header/URL/body contracts, a live login that is expired or rejected never
+  producing a token request or a keychain/`auth.json` write (both providers), the board keeping
+  its last figures until the CLI renews, saved-copy refresh with compare-and-swap write-back,
+  `refresh_token_reused` on a saved Codex copy, 429 cooldown with last-good values,
+  unknown-key preservation, Codex window classification including a sole weekly window in the
+  primary slot, connection failure retry cadence and request coalescing. All network and
   keychain access in these tests is faked and sandboxed.
 - A gated live check (`MENUSPRITE_LIVE_USAGE=1 … --filter liveReadOnlyUsage`) reads the
   real logins through a keychain that refuses writes and a transport that refuses POSTs,

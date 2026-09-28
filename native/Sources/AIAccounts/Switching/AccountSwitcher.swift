@@ -446,7 +446,7 @@ public struct AccountSwitcher: Sendable {
     // MARK: Helpers
 
     func readLiveClaude() throws -> String? {
-        try keychain.readPassword(service: paths.claudeLiveService, account: paths.keychainAccount)
+        try keychain.readCLIOwnedPassword(service: paths.claudeLiveService, account: paths.keychainAccount)
     }
 
     func readLiveCodex() throws -> String? {

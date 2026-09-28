@@ -2,7 +2,9 @@ import Foundation
 import Security
 
 public enum KeychainError: Error, Sendable, Equatable, LocalizedError {
-    /// macOS would have to show an access prompt, or the keychain is locked. MenuSprite never prompts.
+    /// macOS would have to show an access prompt, or the keychain is locked. The Security framework's
+    /// "fail instead of prompting" flag is not honoured for a partition-list mismatch on current macOS, so
+    /// reads of items other tools own go through `readCLIOwnedPassword`, which cannot mismatch.
     case interactionRequired(OSStatus)
     case readFailed(OSStatus)
     case toolFailed(String)
@@ -22,8 +24,13 @@ public enum KeychainError: Error, Sendable, Equatable, LocalizedError {
 }
 
 public protocol KeychainStoring: Sendable {
-    /// The item's secret, or nil when no item exists. Never shows UI.
+    /// The item's secret, or nil when no item exists. Never shows a keychain dialog.
     func readPassword(service: String, account: String?) throws -> String?
+    /// Reads an item the Claude Code / Codex CLIs own (their live login) the way they read it: through
+    /// `/usr/bin/security`. An item written by those CLIs carries the `apple-tool:` partition, so a direct
+    /// Security-framework read from MenuSprite (team partition) would mismatch and macOS would show a
+    /// keychain password dialog every time; the tool matches and never prompts.
+    func readCLIOwnedPassword(service: String, account: String?) throws -> String?
     /// The `acct` attribute of the first matching item.
     func accountName(service: String) throws -> String?
     /// Creates or updates the item the way Claude Code does, so the CLIs keep reading it without a prompt.
@@ -32,8 +39,14 @@ public protocol KeychainStoring: Sendable {
     @discardableResult func deleteAll(service: String) throws -> Int
 }
 
-/// Reads through the Security framework (verified prompt-free for the CLIs' items with MenuSprite's
-/// signing identity). Mutations go through `/usr/bin/security` exactly as Claude Code 2.1 performs
+public extension KeychainStoring {
+    func readCLIOwnedPassword(service: String, account: String?) throws -> String? {
+        try readPassword(service: service, account: account)
+    }
+}
+
+/// Secrets are read through `/usr/bin/security` (see `readPassword`); only attribute lookups use the
+/// Security framework, which never needs the secret and so never prompts. Mutations go through `/usr/bin/security` exactly as Claude Code 2.1 performs
 /// them: `security -i` over stdin for lines up to 4032 bytes. Larger payloads use the Security
 /// framework, preserving existing access lists and trusting the CLI's security tool on new items.
 /// Secrets never enter process arguments; longer interactive lines would silently be truncated.
@@ -46,23 +59,34 @@ public struct SystemKeychain: KeychainStoring {
     /// A separate keychain is useful for isolated integration tests. Normal app use leaves this nil.
     public init(keychainPath: String? = nil) { self.keychainPath = keychainPath }
 
+    /// Every item MenuSprite reads was written by `/usr/bin/security` — Claude Code's live login and the
+    /// saved copies alike (see `writePassword`) — so each carries the `apple-tool:` partition. A direct
+    /// Security-framework read from MenuSprite's team partition mismatches and macOS shows a password
+    /// dialog; `kSecUseAuthenticationUIFail` does not stop it, and "Always Allow" is lost the next time the
+    /// item is rewritten. Reading through the same tool always matches, so no read ever prompts.
     public func readPassword(service: String, account: String?) throws -> String? {
-        var query = try query(service: service, account: account)
-        query[kSecReturnData as String] = true
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        switch status {
-        case errSecSuccess:
-            guard let data = result as? Data else { return nil }
-            guard let text = String(data: data, encoding: .utf8) else { throw KeychainError.readFailed(errSecDecode) }
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        try readCLIOwnedPassword(service: service, account: account)
+    }
+
+    public func readCLIOwnedPassword(service: String, account: String?) throws -> String? {
+        try Self.requireSafe(service)
+        var arguments = ["find-generic-password", "-s", service]
+        if let account { try Self.requireSafe(account); arguments += ["-a", account] }
+        arguments.append("-w")
+        if let keychainPath { try Self.requireSafe(keychainPath); arguments.append(keychainPath) }
+        let result = try Self.runSecurity(arguments, input: nil, captureOutput: true)
+        switch result.status {
+        case 0:
+            let trimmed = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
-        case errSecItemNotFound:
+        case Self.itemNotFoundExit:
             return nil
-        case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
-            throw KeychainError.interactionRequired(status)
         default:
-            throw KeychainError.readFailed(status)
+            // Never surface the tool's output: it can hold the secret. stderr names only the failure.
+            if result.stderr.localizedCaseInsensitiveContains("interaction is not allowed") {
+                throw KeychainError.interactionRequired(errSecInteractionNotAllowed)
+            }
+            throw KeychainError.toolFailed("security exited with status \(result.status)")
         }
     }
 
@@ -102,37 +126,19 @@ public struct SystemKeychain: KeychainStoring {
         }
     }
 
+    /// A secret too long for one interactive line is written by the same tool with the value in the
+    /// command's arguments. The keychain item then belongs to `/usr/bin/security` exactly as a short one
+    /// does, so the CLIs and MenuSprite both read it without a prompt. Writing it through the Security
+    /// framework instead would stamp the item as MenuSprite's, and every later read by Claude Code — or by
+    /// MenuSprite itself — would ask for the keychain password. The cost is that the secret is briefly
+    /// visible in this process's arguments to other programs running as the same user.
     private func writeLargePassword(service: String, account: String, value: String) throws {
-        var query = try query(service: service, account: account)
-        query.removeValue(forKey: kSecMatchLimit as String)
-        let attributes = [kSecValueData as String: Data(value.utf8)]
-        var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            // Trust only this application and the CLI's security tool for newly created items.
-            var securityApp: SecTrustedApplication?, thisApp: SecTrustedApplication?
-            guard SecTrustedApplicationCreateFromPath(Self.securityTool, &securityApp) == errSecSuccess,
-                  SecTrustedApplicationCreateFromPath(nil, &thisApp) == errSecSuccess,
-                  let securityApp, let thisApp else {
-                throw KeychainError.toolFailed("Unable to create keychain access policy")
-            }
-            var access: SecAccess?
-            status = SecAccessCreate(service as CFString, [securityApp, thisApp] as CFArray, &access)
-            guard status == errSecSuccess, let access else {
-                throw KeychainError.toolFailed("Keychain access policy failed (\(status))")
-            }
-            query[kSecValueData as String] = Data(value.utf8)
-            query[kSecAttrAccess as String] = access
-            if let keychain = try openKeychain() {
-                query.removeValue(forKey: kSecMatchSearchList as String)
-                query[kSecUseKeychain as String] = keychain
-            }
-            status = SecItemAdd(query as CFDictionary, nil)
-        }
-        guard status == errSecSuccess else {
-            if [errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled].contains(status) {
-                throw KeychainError.interactionRequired(status)
-            }
-            throw KeychainError.toolFailed("Keychain write failed (\(status))")
+        var arguments = ["add-generic-password", "-U", "-a", account, "-s", service,
+                         "-X", CredentialJSON.hex(value)]
+        if let keychainPath { arguments.append(keychainPath) }
+        let result = try Self.runSecurity(arguments, input: nil)
+        guard result.status == 0 else {
+            throw KeychainError.toolFailed("security exited with status \(result.status)")
         }
     }
 
@@ -174,16 +180,31 @@ public struct SystemKeychain: KeychainStoring {
         }
     }
 
-    private struct ToolResult { let status: Int32; let stderr: String }
+    private struct ToolResult { let status: Int32; let stderr: String; let stdout: String }
 
-    private static func runSecurity(_ arguments: [String], input: String?) throws -> ToolResult {
+    /// Collects a child's stdout while it runs, so output larger than the pipe buffer cannot stall it.
+    private final class OutputCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+        func append(_ chunk: Data) { lock.withLock { data.append(chunk) } }
+        var text: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
+    }
+
+    private static func runSecurity(_ arguments: [String], input: String?, captureOutput: Bool = false) throws -> ToolResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: securityTool)
         process.arguments = arguments
         process.environment = [:]
         let stdin = Pipe(), stderr = Pipe()
         process.standardInput = input == nil ? FileHandle.nullDevice : stdin
-        process.standardOutput = FileHandle.nullDevice
+        let stdout = Pipe(), collector = OutputCollector()
+        process.standardOutput = captureOutput ? stdout : FileHandle.nullDevice
+        if captureOutput {
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty { handle.readabilityHandler = nil } else { collector.append(chunk) }
+            }
+        }
         process.standardError = stderr
         let finished = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in finished.signal() }
@@ -197,7 +218,12 @@ public struct SystemKeychain: KeychainStoring {
             throw KeychainError.toolFailed("security timed out")
         }
         let message = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        return ToolResult(status: process.terminationStatus, stderr: message.trimmingCharacters(in: .whitespacesAndNewlines))
+        if captureOutput {
+            stdout.fileHandleForReading.readabilityHandler = nil
+            collector.append(stdout.fileHandleForReading.readDataToEndOfFile())
+        }
+        return ToolResult(status: process.terminationStatus, stderr: message.trimmingCharacters(in: .whitespacesAndNewlines),
+                          stdout: collector.text)
     }
 }
 

@@ -140,6 +140,14 @@ func systemKeychainRoundTripsStdinAndFrameworkPaths() throws {
     try keychain.writePassword(service: service, account: "testuser", value: large)
     #expect(try keychain.readPassword(service: service, account: "testuser") == large)
     #expect(try keychain.accountName(service: service) == "testuser")
+    // The CLIs' own login is read through /usr/bin/security, as they read it, so it cannot partition-mismatch.
+    #expect(try keychain.readCLIOwnedPassword(service: service, account: "testuser") == large)
+    #expect(try keychain.readCLIOwnedPassword(service: service, account: nil) == large)
+    #expect(try keychain.readCLIOwnedPassword(service: "menusprite-absent \(UUID().uuidString)", account: nil) == nil)
+    let huge = "{\"claudeAiOauth\":{\"accessToken\":\"\(String(repeating: "y", count: 100_000))\"}}"
+    try keychain.writePassword(service: service, account: "testuser", value: huge)
+    #expect(try keychain.readCLIOwnedPassword(service: service, account: "testuser") == huge) // larger than a pipe buffer
+    try keychain.writePassword(service: service, account: "testuser", value: large)
     let cli = Process(), output = Pipe()
     cli.executableURL = URL(fileURLWithPath: "/usr/bin/security")
     cli.arguments = ["find-generic-password", "-s", service, "-a", "testuser", "-w", path]
@@ -155,7 +163,7 @@ func systemKeychainRoundTripsStdinAndFrameworkPaths() throws {
     #expect(try keychain.readPassword(service: service, account: "testuser") == large)
     #expect(try keychain.deleteAll(service: service) == 1)
     #expect(try keychain.readPassword(service: service, account: nil) == nil)
-
+    #expect(try keychain.readCLIOwnedPassword(service: service, account: nil) == nil)
 }
 
 @Test func providerRedirectsNeverForwardCredentials() async throws {

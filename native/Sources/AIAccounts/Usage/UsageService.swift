@@ -1,14 +1,40 @@
 import Foundation
 
+/// How long a fetched usage snapshot stays fresh before the next request goes to the provider. Chosen
+/// in the AI Accounts board; the menu-bar readings and the board both follow it. Shorter than five
+/// minutes is Prerak's call, not OpenUsage's: a provider that answers 429 puts the account in a
+/// cooldown and the last good values are shown with a notice meanwhile.
+public enum UsageRefreshInterval {
+    public static let key = "MenuSprite.AIUsageRefreshSeconds"
+    public static let options: [TimeInterval] = [60, 120, 300, 600, 900, 1800]
+    public static let standard: TimeInterval = 300
+
+    public static var current: TimeInterval {
+        get {
+            let saved = UserDefaults.standard.double(forKey: key)
+            return options.contains(saved) ? saved : standard
+        }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+}
+
 /// Fetches Claude and Codex limits from the providers' own usage endpoints, the way OpenUsage does.
-/// Results are cached per login for five minutes; a changed login (a switch, or the CLI rotating its
+/// Results are cached per login for the chosen refresh interval (five minutes unless changed); a changed login (a switch, or the CLI rotating its
 /// token) is noticed on the next call and fetched at once. Tokens never leave this actor except in
 /// request headers and verified write-backs.
+///
+/// **The live login is read-only.** The token the Claude Code and Codex CLIs are signed in with is never
+/// refreshed and never written back from here: a refresh token is single-use, so a refresh whose
+/// write-back fails (a keychain that would prompt, a concurrent CLI rewrite) leaves the CLI holding a
+/// dead one and signs it out, and a keychain item recreated by MenuSprite is locked to MenuSprite's team
+/// and makes every other tool prompt. An expired live token is reported as `awaitingCLIRenewal` and the
+/// board keeps its last figures until the CLI renews it. Only switcher-saved copies of accounts the CLI
+/// is not using are rotated, and only into their own saved copy.
 public actor UsageService: UsageFetching {
-    public static let shared = UsageService()
+    public static let shared = UsageService(refreshInterval: { UsageRefreshInterval.current })
 
-    /// OpenUsage's fixed cadence.
-    public static let freshness: TimeInterval = 300
+    /// OpenUsage's cadence, the default when no interval has been chosen.
+    public static let freshness: TimeInterval = UsageRefreshInterval.standard
     /// Rotate a token this close to expiry — the CLIs' own slack.
     static let refreshWindow: TimeInterval = 300
     static let rateLimitCooldown: TimeInterval = 300
@@ -22,6 +48,12 @@ public actor UsageService: UsageFetching {
         var savedEmail: String? {
             if case .saved(let email) = self { return email }
             return nil
+        }
+
+        /// The CLI's own login: read, never refreshed, never written.
+        var isLive: Bool {
+            if case .live = self { return true }
+            return false
         }
     }
 
@@ -43,6 +75,9 @@ public actor UsageService: UsageFetching {
         let result: Result<UsageSnapshot, UsageError>
         let attemptedAt: Date
         let validFor: TimeInterval
+        /// Ordinary results follow the chosen refresh interval, read at lookup so a change applies at
+        /// once; rate-limit cooldowns and connection retries keep their own fixed length.
+        let followsRefreshInterval: Bool
         let lastGood: UsageSnapshot?
     }
 
@@ -52,17 +87,20 @@ public actor UsageService: UsageFetching {
     private let keychain: any KeychainStoring
     private let http: any HTTPTransport
     private let now: @Sendable () -> Date
+    private let refreshInterval: @Sendable () -> TimeInterval
     private var entries: [Key: Entry] = [:]
     private var cooldowns: [CooldownKey: Date] = [:]
     private var inFlight: [Key: Task<Result<UsageSnapshot, UsageError>, Never>] = [:]
     private var claudeStateStamp: (modified: Date, size: Int, email: String?)?
 
     public init(paths: AIAccountPaths = .standard, keychain: any KeychainStoring = SystemKeychain(),
-                http: any HTTPTransport = URLSessionTransport(), now: @escaping @Sendable () -> Date = Date.init) {
+                http: any HTTPTransport = URLSessionTransport(), now: @escaping @Sendable () -> Date = Date.init,
+                refreshInterval: @escaping @Sendable () -> TimeInterval = { UsageService.freshness }) {
         self.paths = paths
         self.keychain = keychain
         self.http = http
         self.now = now
+        self.refreshInterval = refreshInterval
     }
 
     public func activeUsage(_ provider: AIProvider, force: Bool) async -> Result<UsageSnapshot, UsageError> {
@@ -119,13 +157,16 @@ public actor UsageService: UsageFetching {
         var working = credential
         var storedFingerprint = credential.tokenFingerprint
         do {
-            if working.expires(within: Self.refreshWindow, now: now()), let refreshToken = working.refreshToken {
+            if key.source.isLive {
+                if working.expires(within: 0, now: now()) { throw UsageError.awaitingCLIRenewal }
+            } else if working.expires(within: Self.refreshWindow, now: now()), let refreshToken = working.refreshToken {
                 let refreshed = try await refreshClaude(working, refreshToken: refreshToken, source: key.source)
                 working = refreshed.credential
                 if refreshed.persisted { storedFingerprint = working.tokenFingerprint }
             }
             var response = try await send(ClaudeUsageAPI.usageRequest(accessToken: working.accessToken))
             if Self.isAuthFailure(response) {
+                guard !key.source.isLive else { throw UsageError.awaitingCLIRenewal }
                 guard let refreshToken = working.refreshToken else { throw UsageError.sessionExpired }
                 let refreshed = try await refreshClaude(working, refreshToken: refreshToken, source: key.source)
                 working = refreshed.credential
@@ -169,13 +210,16 @@ public actor UsageService: UsageFetching {
                 working = reread
                 storedFingerprint = reread.tokenFingerprint
             }
-            if working.expires(within: Self.refreshWindow, now: now()), let refreshToken = working.refreshToken {
+            if key.source.isLive {
+                if working.expires(within: 0, now: now()) { throw UsageError.awaitingCLIRenewal }
+            } else if working.expires(within: Self.refreshWindow, now: now()), let refreshToken = working.refreshToken {
                 let refreshed = try await refreshCodex(working, refreshToken: refreshToken, source: key.source)
                 working = refreshed.credential
                 if refreshed.persisted { storedFingerprint = working.tokenFingerprint }
             }
             var response = try await send(CodexUsageAPI.usageRequest(accessToken: working.accessToken, accountID: working.accountID))
             if Self.isAuthFailure(response) {
+                guard !key.source.isLive else { throw UsageError.awaitingCLIRenewal }
                 guard let refreshToken = working.refreshToken else { throw UsageError.sessionExpired }
                 let refreshed = try await refreshCodex(working, refreshToken: refreshToken, source: key.source)
                 working = refreshed.credential
@@ -260,7 +304,7 @@ public actor UsageService: UsageFetching {
                 guard try readClaude(source, paths: paths, keychain: keychain)?.tokenFingerprint == expected else { return .storeChanged }
                 switch source {
                 case .live:
-                    try keychain.writePassword(service: paths.claudeLiveService, account: paths.keychainAccount, value: rawJSON)
+                    return .failed // the CLI owns the live login
                 case .saved(let email):
                     let service = paths.savedService(.claude, email: email)
                     let account = try keychain.accountName(service: service) ?? paths.keychainAccount
@@ -270,8 +314,7 @@ public actor UsageService: UsageFetching {
                 guard try readCodex(source, paths: paths, keychain: keychain)?.tokenFingerprint == expected else { return .storeChanged }
                 switch source {
                 case .live:
-                    guard let credential = CodexCredential(json: rawJSON) else { return .failed }
-                    try AtomicFile.write(Data(credential.formatted(pretty: true).utf8), to: paths.codexAuth, permissions: 0o600)
+                    return .failed // the CLI owns the live login
                 case .saved(let email):
                     let service = paths.savedService(.codex, email: email)
                     let account = try keychain.accountName(service: service) ?? email
@@ -299,10 +342,10 @@ public actor UsageService: UsageFetching {
         let text: String?
         switch source {
         case .live:
-            if let exact = try keychain.readPassword(service: paths.claudeLiveService, account: paths.keychainAccount) {
+            if let exact = try keychain.readCLIOwnedPassword(service: paths.claudeLiveService, account: paths.keychainAccount) {
                 text = exact
             } else {
-                text = try keychain.readPassword(service: paths.claudeLiveService, account: nil)
+                text = try keychain.readCLIOwnedPassword(service: paths.claudeLiveService, account: nil)
             }
         case .saved(let email):
             text = try keychain.readPassword(service: paths.savedService(.claude, email: email), account: nil)
@@ -349,7 +392,8 @@ public actor UsageService: UsageFetching {
 
     private func cachedResult(_ key: Key, fingerprint: String, force: Bool) -> Result<UsageSnapshot, UsageError>? {
         guard !force, let entry = entries[key], entry.fingerprint == fingerprint,
-              now().timeIntervalSince(entry.attemptedAt) < entry.validFor else { return nil }
+              now().timeIntervalSince(entry.attemptedAt) < (entry.followsRefreshInterval ? refreshInterval() : entry.validFor)
+        else { return nil }
         return entry.result
     }
 
@@ -372,7 +416,7 @@ public actor UsageService: UsageFetching {
         let result = lastGood(key, identity: identity, notice: Self.rateLimitNotice(retryAfter))
             ?? .failure(.rateLimited(retryAfterSeconds: retryAfter))
         store(key, fingerprint: fingerprint, identity: identity, result: result, validFor: max(1, cooldown),
-              lastGood: previousGood(key, identity: identity))
+              followsRefreshInterval: false, lastGood: previousGood(key, identity: identity))
         return result
     }
 
@@ -382,7 +426,7 @@ public actor UsageService: UsageFetching {
             good = snapshot
             cooldowns[CooldownKey(provider: key.provider, identity: identity)] = nil
         }
-        store(key, fingerprint: fingerprint, identity: identity, result: result, validFor: Self.freshness, lastGood: good)
+        store(key, fingerprint: fingerprint, identity: identity, result: result, validFor: Self.freshness, followsRefreshInterval: true, lastGood: good)
         return result
     }
 
@@ -391,14 +435,14 @@ public actor UsageService: UsageFetching {
     private func failed(_ key: Key, fingerprint: String, identity: String, error: UsageError) -> Result<UsageSnapshot, UsageError> {
         let transient: Bool
         switch error {
-        case .connectionFailed, .requestFailed, .invalidResponse: transient = true
+        case .connectionFailed, .requestFailed, .invalidResponse, .awaitingCLIRenewal: transient = true
         default: transient = false
         }
         let result = (transient ? lastGood(key, identity: identity, notice: "Couldn't refresh · \(error.localizedDescription)") : nil)
             ?? .failure(error)
         store(key, fingerprint: fingerprint, identity: identity, result: result,
               validFor: error == .connectionFailed ? Self.connectionRetry : Self.freshness,
-              lastGood: previousGood(key, identity: identity))
+              followsRefreshInterval: error != .connectionFailed, lastGood: previousGood(key, identity: identity))
         return result
     }
 
@@ -412,9 +456,9 @@ public actor UsageService: UsageFetching {
     }
 
     private func store(_ key: Key, fingerprint: String, identity: String, result: Result<UsageSnapshot, UsageError>,
-                       validFor: TimeInterval, lastGood: UsageSnapshot?) {
+                       validFor: TimeInterval, followsRefreshInterval: Bool, lastGood: UsageSnapshot?) {
         entries[key] = Entry(fingerprint: fingerprint, identity: identity, result: result, attemptedAt: now(),
-                             validFor: validFor, lastGood: lastGood)
+                             validFor: validFor, followsRefreshInterval: followsRefreshInterval, lastGood: lastGood)
     }
 
     private func send(_ request: HTTPRequest) async throws -> HTTPResponse {

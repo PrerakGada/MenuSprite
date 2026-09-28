@@ -41,9 +41,10 @@ collection can never land in an item a switch just replaced.
 The signed-in login is identified by an identical saved copy (exact tokens). Otherwise MenuSprite
 asks Anthropic's OAuth profile endpoint (`GET api.anthropic.com/api/oauth/profile`, `account.email`)
 whose login it is, because `~/.claude.json` can still name a previous account after Claude Code
-rotates its tokens. A rejected access token is refreshed through the usage service and asked
-again; a login Anthropic reports as expired is not saved and the switch proceeds; no answer at all
-(offline, server error) changes nothing. The login is saved under the confirmed account — with
+rotates its tokens. A rejected access token is never refreshed from here (the CLI owns the live
+login); it is left unconfirmed until Claude Code renews it, and a login Anthropic reports as
+expired is not saved and the switch proceeds; no answer at all (offline, server error) changes
+nothing. The login is saved under the confirmed account — with
 `mcpOAuth` and every other key intact. An unsaved signed-in login is added to the list first. The target copy is then
 written through `security -i` over stdin for commands up to 4032 bytes, and through the
 Security framework for larger payloads, then read back. Tokens never enter process arguments.

@@ -139,6 +139,9 @@ public enum UsageError: Error, Sendable, Equatable, LocalizedError {
     case missingProfileScope
     /// The refresh token was rejected; only signing in again restores it.
     case sessionExpired
+    /// The CLI's own login has an expired access token. MenuSprite never refreshes or rewrites a login the
+    /// Claude Code and Codex CLIs own, so it waits for the CLI to renew it the next time it runs.
+    case awaitingCLIRenewal
     case rateLimited(retryAfterSeconds: Int?)
     case requestFailed(status: Int)
     case connectionFailed
@@ -152,6 +155,7 @@ public enum UsageError: Error, Sendable, Equatable, LocalizedError {
         case .notLoggedIn: "Not signed in."
         case .missingProfileScope: "This login cannot read usage. Sign in again with the CLI."
         case .sessionExpired: "Session expired. Sign in again with the CLI."
+        case .awaitingCLIRenewal: "Login token expired. The CLI renews it the next time it runs."
         case .rateLimited(let seconds): seconds.map { "Rate limited · retry in \(max(1, $0 / 60))m" } ?? "Rate limited · retrying later"
         case .requestFailed(let status): "Usage request failed (HTTP \(status))."
         case .connectionFailed: "Could not reach the usage service."
@@ -166,7 +170,8 @@ public enum UsageError: Error, Sendable, Equatable, LocalizedError {
 /// the accounts board and auto-switch consume it.
 public protocol UsageFetching: Sendable {
     /// Usage for whichever account the CLI is using right now (the live keychain item or auth file).
-    /// May rotate an expiring token and write it back to that live store.
+    /// Strictly read-only: the live login belongs to the CLI, so an expired token is reported as
+    /// `awaitingCLIRenewal`, never refreshed or written back.
     func activeUsage(_ provider: AIProvider, force: Bool) async -> Result<UsageSnapshot, UsageError>
     /// Usage for a switcher-saved copy. May rotate its token and write it back to that saved copy only.
     func savedUsage(_ provider: AIProvider, email: String, force: Bool) async -> Result<UsageSnapshot, UsageError>

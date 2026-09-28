@@ -48,8 +48,8 @@ enum ClaudeProfileAPI {
 
 extension AccountSwitcher {
     /// Nil when no verifier is configured or nothing is signed in; the state file is trusted then.
-    /// Runs outside the credential gate: a rejected token is refreshed through the usage service,
-    /// which writes the rotation back under that gate.
+    /// Runs outside the credential gate. A rejected token is never refreshed from here: the CLI owns
+    /// the live login and renews it itself, so the answer is "unconfirmed" until it does.
     func confirmLiveClaudeIdentity() async -> LiveClaudeIdentity? {
         guard let http, let credential = (try? readLiveClaude()).flatMap(ClaudeCredential.init(json:)) else { return nil }
         switch await ClaudeProfileAPI.answer(credential, http: http) {
@@ -66,7 +66,10 @@ extension AccountSwitcher {
                 return .verified(tokenFingerprint: current.tokenFingerprint, email: email)
             }
             if case .failure(.sessionExpired) = refresh { return .expired(tokenFingerprint: credential.tokenFingerprint) }
-            return .unconfirmed("Anthropic rejected the signed-in Claude login and it could not be refreshed.")
+            if case .failure(.awaitingCLIRenewal) = refresh {
+                return .unconfirmed("The signed-in Claude login has expired; Claude Code renews it the next time it runs.")
+            }
+            return .unconfirmed("Anthropic rejected the signed-in Claude login.")
         }
     }
 }
