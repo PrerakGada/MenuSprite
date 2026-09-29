@@ -150,3 +150,14 @@ private func values(_ numbers: [String: Double], texts: [String: String] = [:], 
     #expect(texts[1].fontSize < 20)
     #expect(output.placed.first { $0.kind == .icon }!.frame.minX == 3)
 }
+
+@Test @MainActor func twoRowValuesShrinkTogether() {
+    var fan = SpriteConfiguration(name: "Fan & CPU temperature", symbol: "fan.fill", metricIDs: ["sensor.fanSpeed", "sensor.cpuTemperature"])
+    fan.layout = .twoRows
+    let design = SpriteDesign.migrated(from: fan, metric: metric)
+    // "3757 rpm" has a descender and "67°C" does not; fitted alone, the temperature drew larger.
+    let output = DesignRenderer.render(design, values: values([:], texts: ["sensor.fanSpeed": "3757 rpm", "sensor.cpuTemperature": "67°C"]), height: 24)
+    let rpm = output.placed.first { $0.text == "3757 rpm" }, temperature = output.placed.first { $0.text == "67°C" }
+    #expect(rpm != nil && temperature != nil)
+    #expect(rpm?.fontSize == temperature?.fontSize)
+}

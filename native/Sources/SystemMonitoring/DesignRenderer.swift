@@ -148,7 +148,15 @@ public enum DesignRenderer {
             let gap = CGFloat(item.node.style.gap)
             if item.node.style.justify == .even {
                 let child = (band - gap * (n - 1)) / n
+                let before = textSizes(item)
                 for index in item.children.indices { fit(&item.children[index], band: child, reserved: reserved) }
+                // Text that starts at one size across the bands ends at one size, as the two-row
+                // readout drew it: "3757 rpm" has a descender and "67°C" does not, so fitting each
+                // alone left the temperature larger than the fan speed.
+                let after = textSizes(item)
+                var smallest: [Double: Double] = [:]
+                for (path, size) in before { smallest[size] = min(smallest[size] ?? .infinity, after[path] ?? size) }
+                for (path, size) in before { setSize(&item, path[...], smallest[size] ?? size) }
                 return
             }
             for index in item.children.indices { fit(&item.children[index], band: band, reserved: reserved) }
@@ -169,6 +177,20 @@ public enum DesignRenderer {
             }
         default: break
         }
+    }
+    /// The size of every text beneath `item`, by its path of child indices.
+    private static func textSizes(_ item: Resolved) -> [[Int]: Double] {
+        var sizes: [[Int]: Double] = [:]
+        func visit(_ node: Resolved, _ path: [Int]) {
+            if node.node.kind == .text { sizes[path] = node.size }
+            for (index, child) in node.children.enumerated() { visit(child, path + [index]) }
+        }
+        visit(item, [])
+        return sizes
+    }
+    private static func setSize(_ node: inout Resolved, _ path: ArraySlice<Int>, _ size: Double) {
+        guard let first = path.first else { node.size = size; return }
+        setSize(&node.children[first], path.dropFirst(), size)
     }
     /// Reduces the largest text beneath `item` by half a point; false when nothing can shrink.
     private static func shrinkLargest(_ item: inout Resolved, floor: Double) -> Bool {
