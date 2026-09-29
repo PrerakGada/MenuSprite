@@ -19,6 +19,8 @@ final class EnergyDocumentView: NSView {
     private var motionActive = false
     private var motionTimer: Timer?
     private var cachedFlow: EnergyFlow?
+    private var cachedBreakdown: PowerBreakdown?
+    private var cachedIcons: Set<String> = []
     private var cachedFlowImage: NSImage?
     private var cachedFlowSize = NSSize.zero
     private var cachedFlowDark = false
@@ -48,8 +50,8 @@ final class EnergyDocumentView: NSView {
     var flowRect: NSRect { NSRect(x: 0, y: optionsOrigin + (optionsExpanded ? 104 : 0), width: bounds.width, height: showFlow ? flowLayout(flow, top: 0).height : 0) }
     private var appsTop: CGFloat { flowRect.maxY + (showFlow ? 8 : 0) }
     private var appsRect: NSRect {
-        let rows = processRows
-        let height: CGFloat = rows.isEmpty ? 50 : 42 + rows.reduce(0) { $0 + $1.height } + 26 + (processes.notice == nil ? 0 : 17)
+        let layout = appsLayout
+        let height: CGFloat = layout.rows.isEmpty ? 50 : layout.bottom - appsTop + 26 + (processes.notice == nil ? 0 : 17)
         return NSRect(x: 12, y: appsTop, width: bounds.width - 24, height: height)
     }
     private var chartRects: [NSRect] {
@@ -62,22 +64,69 @@ final class EnergyDocumentView: NSView {
     /// macOS's battery menu lists "Apps Using Significant Energy"; this is the CPU-energy
     /// equivalent: an app shows once it draws at least this much.
     static let significantWatts = 0.1
-    private var significantRows: [(row: ProcessConsumerRate, depth: Int)] {
-        var keep = false
-        return processes.visibleRows(limit: 30).filter { item in
-            if item.depth == 0 { keep = item.row.value >= Self.significantWatts }
-            return keep
+    /// Panel width wherever the dashboard is shown: wide enough for the flow's category pills
+    /// beside the sources and the Mac (was 430 before the categories, 29 Sep).
+    nonisolated static let preferredWidth: CGFloat = 560
+    // MARK: Categories — where the system figure goes, and the apps list grouped the same way
+
+    /// Info.plist facts per app bundle, read once while the dashboard lives.
+    private var bundleFacts: [String: BundleFacts?] = [:]
+    func category(of consumer: MemoryConsumer) -> PowerCategory {
+        guard let path = consumer.bundlePath else { return PowerCategories.classify(consumer, facts: nil) }
+        if bundleFacts[path] == nil { bundleFacts[path] = .some(BundleFacts.read(bundlePath: path)) }
+        return PowerCategories.classify(consumer, facts: bundleFacts[path] ?? nil)
+    }
+    struct AppSection { let category: PowerCategory; let total: Double; let rows: [ProcessConsumerRate] }
+    private struct Insight { let key: String; let breakdown: PowerBreakdown; let sections: [AppSection] }
+    private var insightCache: Insight?
+    /// Render harness only: a made-up breakdown to go with `previewFlow`.
+    var previewBreakdown: PowerBreakdown?
+    /// Rebuilt when a new process interval or new sensor figures arrive, not on every frame.
+    private var insight: Insight {
+        let f = flow, rows = processes.hasInterval ? processes.ranked : []
+        let system: Double = f.system ?? -1, outside: Double = f.difference ?? -1
+        let key = "\(processes.sampleCount)|\(rows.count)|\(system)|\(outside)"
+        if let insightCache, insightCache.key == key { return insightCache }
+        var totals: [PowerCategory: Double] = [:], grouped: [PowerCategory: [ProcessConsumerRate]] = [:]
+        var categories: [String: PowerCategory] = [:]
+        for row in rows {
+            let kind = category(of: row.consumer); categories[row.id] = kind
+            totals[kind, default: 0] += row.value
         }
+        for row in rows.prefix(30) where row.value >= Self.significantWatts { grouped[categories[row.id] ?? .apps, default: []].append(row) }
+        var sections: [AppSection] = []
+        for (kind, members) in grouped { sections.append(AppSection(category: kind, total: totals[kind] ?? 0, rows: members)) }
+        sections.sort { a, b in a.total == b.total ? a.category.rawValue < b.category.rawValue : a.total > b.total }
+        let breakdown = PowerBreakdown.make(system: f.system, outside: f.difference, rows: rows) { categories[$0.id] ?? .apps }
+        let result = Insight(key: key, breakdown: breakdown, sections: sections)
+        insightCache = result; return result
+    }
+    var breakdown: PowerBreakdown { previewBreakdown ?? insight.breakdown }
+    var appSections: [AppSection] { insight.sections }
+    private struct AppsLayout {
+        var headers: [(section: AppSection, y: CGFloat)] = []
+        var rows: [(row: ProcessConsumerRate, y: CGFloat, height: CGFloat, indent: CGFloat)] = []
+        var bottom: CGFloat
+    }
+    /// A header per category, its apps under it by energy, an opened group's members under the group.
+    private var appsLayout: AppsLayout {
+        var y = appsTop + 42, layout = AppsLayout(bottom: 0)
+        for (index, section) in appSections.enumerated() {
+            if index > 0 { y += 6 }
+            layout.headers.append((section, y)); y += 24
+            for row in section.rows {
+                let items = [(row, 0)] + (processes.expanded.contains(row.id) ? row.members.map { ($0, 1) } : [])
+                for (item, depth) in items {
+                    let height: CGFloat = item.consumer.presentation.subtitle == nil ? 26 : 40
+                    layout.rows.append((item, y, height, CGFloat(depth) * 18)); y += height
+                }
+            }
+        }
+        layout.bottom = y
+        return layout
     }
     var processRowLayout: [(row: ProcessConsumerRate, y: CGFloat, height: CGFloat)] { processRows.map { ($0.row, $0.y, $0.height) } }
-    private var processRows: [(row: ProcessConsumerRate, y: CGFloat, height: CGFloat, indent: CGFloat)] {
-        var y = appsTop + 42
-        return significantRows.map { item in
-            let height: CGFloat = item.row.consumer.presentation.subtitle == nil ? 26 : 40
-            defer { y += height }
-            return (item.row, y, height, CGFloat(item.depth) * 18)
-        }
-    }
+    private var processRows: [(row: ProcessConsumerRate, y: CGFloat, height: CGFloat, indent: CGFloat)] { appsLayout.rows }
     var requiredHeight: CGFloat { enabled ? max(appsRect.maxY, chartRects.map(\.maxY).max() ?? 0) + 18 : 155 }
     func visibleIconConsumers(in visible: NSRect) -> Set<String> {
         guard enabled else { return [] }
@@ -85,12 +134,16 @@ final class EnergyDocumentView: NSView {
         for item in processRows {
             if visible.intersects(NSRect(x: 12, y: item.y, width: appsRect.width, height: item.height)) { ids.insert(item.row.id) }
         }
+        // A heavy app's pill in the flow carries its icon.
+        if showFlow && visible.intersects(flowRect) {
+            for entry in breakdown.entries { if case .app(let id, _, _, _) = entry.kind { ids.insert(id) } }
+        }
         return ids
     }
     var isAnimating: Bool { motionTimer != nil }
     init(monitoring: MonitoringStore, processes: MemoryBoardStore, power: PowerStore) {
         self.monitoring = monitoring; self.processes = processes; self.power = power
-        super.init(frame: NSRect(x: 0, y: 0, width: 430, height: 1100))
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.preferredWidth, height: 1100))
         setAccessibilityElement(true); setAccessibilityRole(.group); setAccessibilityLabel("Battery and power dashboard")
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -276,7 +329,11 @@ final class EnergyDocumentView: NSView {
     }
     private let chartIDs = ["sensor.PSTR", "battery.temperature", "battery.charge"]
     private func drawCachedFlow(_ current: EnergyFlow) {
-        if cachedFlow != current || cachedFlowSize != flowRect.size || cachedFlowDark != dark || cachedFlowImage == nil {
+        let parts = breakdown
+        let icons = Set(parts.entries.compactMap { entry -> String? in
+            if case .app(_, let path?, _, _) = entry.kind, processes.icons[path] != nil { return path }; return nil
+        })
+        if cachedFlow != current || cachedBreakdown != parts || cachedIcons != icons || cachedFlowSize != flowRect.size || cachedFlowDark != dark || cachedFlowImage == nil {
             let scale = window?.backingScaleFactor ?? 2
             if let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(flowRect.width * scale)), pixelsHigh: Int(ceil(flowRect.height * scale)), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) {
                 rep.size = flowRect.size
@@ -289,7 +346,7 @@ final class EnergyDocumentView: NSView {
                     renderingFlowCache = true; drawFlow(current); renderingFlowCache = false
                     NSGraphicsContext.restoreGraphicsState()
                     let image = NSImage(size: flowRect.size); image.addRepresentation(rep)
-                    cachedFlowImage = image; cachedFlow = current; cachedFlowSize = flowRect.size; cachedFlowDark = dark
+                    cachedFlowImage = image; cachedFlow = current; cachedBreakdown = parts; cachedIcons = icons; cachedFlowSize = flowRect.size; cachedFlowDark = dark
                 }
             }
         }
@@ -298,10 +355,18 @@ final class EnergyDocumentView: NSView {
     }
     // MARK: Power flow (a proportional Sankey, laid out like AlDente's)
 
-    private struct FlowNode { let rect: NSRect; let symbol: String; let tint: NSColor; let caption: String? }
+    private struct FlowNode {
+        let rect: NSRect; let symbol: String; let tint: NSColor; let caption: String?
+        /// Right-hand pills: a name and its watts beside the icon; an app's own icon when loaded.
+        var title: String? = nil
+        var detail: String? = nil
+        var iconPath: String? = nil
+    }
     private struct FlowRibbon {
         let start: NSPoint, end: NSPoint, width: CGFloat, from: NSColor, to: NSColor, value: Double?
         var labelAt: CGFloat = 0.5
+        /// Ribbons into a pill carry no label: the pill states its watts.
+        var labeled = true
         var live: Bool { (value ?? 0) > 0.05 }
         func point(_ t: CGFloat) -> NSPoint {
             let u = 1 - t, mid = (start.x + end.x) / 2
@@ -315,11 +380,13 @@ final class EnergyDocumentView: NSView {
     /// - Charging: adapter → battery (above the Mac) and → Mac.
     /// - Discharging on the cable: adapter and battery stacked on the left, both merging into the Mac.
     /// - One source only: that source → Mac; an idle battery is not drawn.
-    /// Out of the Mac: System (`sensor.PSTR`) and Other, the measured residual (adapter − system −
-    /// battery: accessories, conversion losses). There is no CPU-only or per-port sensor, so the Mac
-    /// splits in two where AlDente splits in three.
+    /// Out of the Mac: a pill per category of app (and one per app drawing 2 W or more), then
+    /// "Display & system" — system power (`sensor.PSTR`) that app CPU energy does not account
+    /// for — then Other, the measured residual (adapter − system − battery: accessories,
+    /// conversion losses). Before per-app readings arrive, System and Other as before.
     private func flowLayout(_ f: EnergyFlow, top: CGFloat) -> FlowLayout {
         let minX: CGFloat = 14, width = bounds.width - 28, maxX = minX + width
+        let outs = breakdown.entries
         let adapter = max(0, f.adapter ?? 0), charging = f.batteryIn ?? 0, discharging = f.batteryOut ?? 0
         // The pack's gauge reads a few tens of mA either way while macOS holds the charge (0.38 W seen at a
         // 70% hold with the adapter carrying everything). Below ~50 mA — the dead band PowerStore uses
@@ -328,23 +395,25 @@ final class EnergyDocumentView: NSView {
         let hasAdapter = adapter > 0.05, isCharging = hasAdapter && charging > idle, isDischarging = discharging > idle
         let toMac = hasAdapter ? max(0, adapter - (isCharging ? charging : 0)) : 0
         let macIn = toMac + (isDischarging ? discharging : 0)
-        let system = f.system ?? 0, other = f.difference ?? 0
+        let outTotal = outs.reduce(0) { $0 + $1.watts }
         // ~1.4 pt per watt like AlDente, raised so the Mac is never a sliver, never taller than 124 pt.
-        let largest = max(1, adapter, macIn, system + other, isCharging ? charging : 0)
+        let largest = max(1, adapter, macIn, outTotal, isCharging ? charging : 0)
         let k = CGFloat(min(124 / largest, max(1.4, 44 / max(1, macIn))))
         func thick(_ v: Double) -> CGFloat { v > 0.05 ? max(1.5, CGFloat(v) * k) : 0 }
         let nodeWidth: CGFloat = 44, gap: CGFloat = 6, stack: CGFloat = 18, pad: CGFloat = 10
-        let hubX = (minX + width * 0.44).rounded(), outX = maxX - nodeWidth
+        let pillWidth = min(180, max(140, (width * 0.3).rounded())), pillGap: CGFloat = 5
+        let hubX = (minX + width * 0.36).rounded(), outX = maxX - pillWidth
         let showAdapter = hasAdapter || (!isDischarging && f.adapter != nil && power.snapshot.pluggedIn != false)
         let showSourceBattery = isDischarging || !showAdapter
         let adapterHeight = max(30, thick(adapter))
         let sourceBatteryHeight = max(30, thick(discharging))
         let sinkBatteryHeight = max(30, thick(charging))
-        let macHeight = max(30, thick(macIn), thick(system) + thick(other))
-        let systemHeight = max(22, thick(system)), otherHeight = max(22, thick(other))
+        let outThick = outs.map { thick($0.watts) }
+        let macHeight = max(30, thick(macIn), outThick.reduce(0, +))
+        let pillHeights = outThick.map { max(30, $0) }
         let left = (showAdapter ? adapterHeight : 0) + (showSourceBattery ? sourceBatteryHeight : 0) + (showAdapter && showSourceBattery ? stack : 0)
         let middle = macHeight + (isCharging ? sinkBatteryHeight + stack : 0)
-        let right = systemHeight + 14 + otherHeight
+        let right = pillHeights.reduce(0, +) + pillGap * CGFloat(max(0, outs.count - 1))
         let content = max(left, middle, right, 56)
         let height = ((content + pad * 2) / 10).rounded(.up) * 10
         let cy = top + height / 2
@@ -369,13 +438,17 @@ final class EnergyDocumentView: NSView {
             nodes.append(FlowNode(rect: r, symbol: batterySymbol(f.charge), tint: green, caption: nil))
         }
         let mac = NSRect(x: hubX, y: y, width: nodeWidth, height: macHeight)
-        nodes.append(FlowNode(rect: mac, symbol: "laptopcomputer", tint: blue, caption: nil))
+        nodes.append(FlowNode(rect: mac, symbol: "laptopcomputer", tint: blue,
+                              caption: macHeight >= 44 ? f.system.map { $0 >= 10 ? String(format: "%.1f W", $0) : String(format: "%.2f W", $0) } : nil))
         // Right column, centred on the Mac and kept inside the diagram.
         let outTop = max(top + pad, min(mac.midY - right / 2, top + height - pad - right))
-        let systemRect = NSRect(x: outX, y: outTop, width: nodeWidth, height: systemHeight)
-        let otherRect = NSRect(x: outX, y: outTop + systemHeight + 14, width: nodeWidth, height: otherHeight)
-        nodes.append(FlowNode(rect: systemRect, symbol: "cpu", tint: violet, caption: nil))
-        nodes.append(FlowNode(rect: otherRect, symbol: "ellipsis", tint: foreground, caption: nil))
+        var pills: [NSRect] = [], py = outTop
+        for (entry, h) in zip(outs, pillHeights) {
+            let r = NSRect(x: outX, y: py, width: pillWidth, height: h); pills.append(r); py += h + pillGap
+            let look = style(entry)
+            nodes.append(FlowNode(rect: r, symbol: look.symbol, tint: look.tint, caption: nil,
+                                  title: entry.title, detail: Self.flowWatts(entry.watts), iconPath: look.iconPath))
+        }
         // Ribbons: each leaves its node stacked edge to edge and arrives the same way.
         var macInY = mac.midY - thick(macIn) / 2
         if let a = adapterRect {
@@ -396,12 +469,32 @@ final class EnergyDocumentView: NSView {
             ribbons.append(FlowRibbon(start: NSPoint(x: b.maxX + gap, y: b.midY), end: NSPoint(x: mac.minX - gap, y: macInY + t / 2),
                                       width: max(t, 1), from: amber, to: blue, value: f.batteryOut))
         }
-        let outStart = mac.midY - (thick(system) + thick(other)) / 2
-        ribbons.append(FlowRibbon(start: NSPoint(x: mac.maxX + gap, y: outStart + thick(system) / 2), end: NSPoint(x: systemRect.minX - gap, y: systemRect.midY),
-                                  width: max(thick(system), 1), from: blue, to: violet, value: f.system, labelAt: 0.42))
-        ribbons.append(FlowRibbon(start: NSPoint(x: mac.maxX + gap, y: outStart + thick(system) + thick(other) / 2), end: NSPoint(x: otherRect.minX - gap, y: otherRect.midY),
-                                  width: max(thick(other), 1), from: blue, to: teal, value: f.difference, labelAt: 0.5))
+        var outY = mac.midY - outThick.reduce(0, +) / 2
+        for ((entry, t), pill) in zip(zip(outs, outThick), pills) {
+            ribbons.append(FlowRibbon(start: NSPoint(x: mac.maxX + gap, y: outY + t / 2), end: NSPoint(x: pill.minX - gap, y: pill.midY),
+                                      width: max(t, 1), from: blue, to: style(entry).tint, value: entry.watts, labeled: false))
+            outY += t
+        }
         return FlowLayout(nodes: nodes, ribbons: ribbons, height: height)
+    }
+    func tint(_ category: PowerCategory) -> NSColor {
+        switch category {
+        case .development: violet
+        case .browsing: NSColor(red: 0.33, green: 0.68, blue: 0.98, alpha: 1)
+        case .work: amber
+        case .media: NSColor(red: 0.93, green: 0.45, blue: 0.62, alpha: 1)
+        case .background: NSColor(red: 0.58, green: 0.61, blue: 0.68, alpha: 1)
+        case .apps: NSColor(red: 0.36, green: 0.80, blue: 0.86, alpha: 1)
+        }
+    }
+    private func style(_ entry: PowerBreakdown.Entry) -> (symbol: String, tint: NSColor, iconPath: String?) {
+        switch entry.kind {
+        case .app(_, let path, let symbol, let category): (symbol, tint(category), path)
+        case .category(let category): (category.symbol, tint(category), nil)
+        case .restOfMac: ("display", NSColor(red: 0.52, green: 0.58, blue: 0.78, alpha: 1), nil)
+        case .outside: ("ellipsis", teal, nil)
+        case .system: ("cpu", violet, nil)
+        }
     }
     private func batterySymbol(_ charge: Double?) -> String {
         let c = charge ?? 100
@@ -418,6 +511,15 @@ final class EnergyDocumentView: NSView {
             let path = NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius)
             NSColor(calibratedWhite: dark ? 0.16 : 0.97, alpha: 0.92).setFill(); path.fill()
             hairline.setStroke(); path.lineWidth = 1; path.stroke()
+            if let title = node.title {
+                let icon = NSRect(x: r.minX + 9, y: r.midY - 8, width: 16, height: 16)
+                if let iconPath = node.iconPath, let image = processes.icons[iconPath] {
+                    image.draw(in: icon, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                } else { symbol(node.symbol, in: icon.insetBy(dx: 1, dy: 1), color: node.tint) }
+                text(title, NSRect(x: r.minX + 31, y: r.midY - 14.5, width: r.width - 36, height: 15), size: 11, weight: .semibold)
+                text(node.detail ?? "", NSRect(x: r.minX + 31, y: r.midY + 0.5, width: r.width - 36, height: 14), size: 10.5, weight: .medium, color: muted, digits: true)
+                continue
+            }
             let small = r.height < 30 || node.symbol == "cpu" || node.symbol == "ellipsis"
             let icon: CGFloat = small ? 14 : 17
             let iconY = node.caption == nil ? r.midY - icon / 2 : r.midY - icon / 2 - 8
@@ -428,7 +530,7 @@ final class EnergyDocumentView: NSView {
         }
         // Labels sit on their ribbons; one that would overlap an earlier label moves clear of it.
         var placed: [NSRect] = []
-        for ribbon in layout.ribbons where ribbon.live {
+        for ribbon in layout.ribbons where ribbon.live && ribbon.labeled {
             let p = ribbon.point(ribbon.labelAt)
             // A thin ribbon carries its label just under the line rather than across a neighbour.
             var rect = NSRect(x: p.x - 36, y: ribbon.width < 12 ? p.y + ribbon.width / 2 + 1 : p.y - 8.5, width: 72, height: 17)
@@ -490,6 +592,13 @@ final class EnergyDocumentView: NSView {
         card(r, radius: 20)
         text("Apps Using Significant Energy", NSRect(x: r.minX + 16, y: r.minY + 13, width: r.width - 120, height: 19), size: 13, weight: .semibold)
         text("CPU energy", NSRect(x: r.maxX - 110, y: r.minY + 15, width: 94, height: 15), size: 10, color: muted, alignment: .right)
+        for header in appsLayout.headers where NSRect(x: 12, y: header.y, width: r.width, height: 24).intersects(dirtyRect) {
+            let category = header.section.category
+            symbol(category.symbol, in: NSRect(x: 29, y: header.y + 4, width: 14, height: 13), color: tint(category))
+            text(category.title, NSRect(x: 54, y: header.y + 2, width: bounds.width - 196, height: 17), size: 11, weight: .semibold, color: tint(category))
+            text(ProcessPanelKind.power.formatted(header.section.total), NSRect(x: bounds.width - 143, y: header.y + 2, width: 93, height: 17),
+                 size: 11, weight: .semibold, color: tint(category), alignment: .right, digits: true)
+        }
         for item in rows {
             let row = item.row, y = item.y, presentation = item.row.consumer.presentation, indent = item.indent
             guard NSRect(x: 12, y: y, width: r.width, height: item.height).intersects(dirtyRect) else { continue }
@@ -500,7 +609,10 @@ final class EnergyDocumentView: NSView {
             if ProcessQuitArming.shared.isArmed(row.id) {
                 text("quitting…", NSRect(x: bounds.width - 143, y: y + 1, width: 93, height: 17), size: 10, weight: .medium, color: .systemOrange, alignment: .right)
             } else {
-                text((row.missingCount > 0 ? "≥ " : "") + ProcessPanelKind.power.formatted(row.value), NSRect(x: bounds.width - 143, y: y, width: 93, height: 19), size: 11, color: muted, alignment: .right, digits: true)
+                // An app at the heavy threshold has its own pill in the flow; its figure stands out here too.
+                let heavy = item.indent == 0 && row.value >= PowerBreakdown.heavyWatts
+                text((row.missingCount > 0 ? "≥ " : "") + ProcessPanelKind.power.formatted(row.value), NSRect(x: bounds.width - 143, y: y, width: 93, height: 19),
+                     size: 11, weight: heavy ? .bold : .regular, color: heavy ? foreground : muted, alignment: .right, digits: true)
             }
         }
         if let notice = processes.notice {
@@ -568,7 +680,8 @@ final class EnergyDocumentView: NSView {
         let f = flow
         var rows: [(String, NSRect)] = [("Battery \(f.charge.map { String(format: "%.0f percent", $0) } ?? "unavailable"). \(controlStatus). \(issue ?? "")", batteryBar.insetBy(dx: 0, dy: -6))]
         if showFlow {
-            rows.append(("Power flow. Adapter \(EnergyFlow.watts(f.adapter)): \(EnergyFlow.watts(f.batteryIn)) into the battery. Battery out \(EnergyFlow.watts(f.batteryOut)). Mac system \(EnergyFlow.watts(f.system)). Other, the unaccounted difference, \(EnergyFlow.watts(f.difference)).", flowRect))
+            let parts = breakdown.entries.map { "\($0.title) \(EnergyFlow.watts($0.watts))" }.joined(separator: ", ")
+            rows.append(("Power flow. Adapter \(EnergyFlow.watts(f.adapter)): \(EnergyFlow.watts(f.batteryIn)) into the battery. Battery out \(EnergyFlow.watts(f.batteryOut)). Mac system \(EnergyFlow.watts(f.system)). Where it goes: \(parts).", flowRect))
         }
         for index in 0..<3 where chartVisibility[index] {
             let id = chartIDs[index], value = monitoring.display(id)
@@ -585,7 +698,7 @@ final class EnergyDocumentView: NSView {
             return element
         }
         setAccessibilityChildren((accessibilityRows as [Any]) + NSAccessibility.unignoredChildren(from: subviews.filter { !$0.isHidden }))
-        toolTip = controlStatus + "\n\nPower values are separate sensor observations, not wall-meter or per-component totals. Difference = adapter − system − signed battery flow. Process power includes CPU energy only. The saved MenuSprite charge target is not an active system limit while control is off."
+        toolTip = controlStatus + "\n\nPower values are separate sensor observations, not wall-meter or per-component totals. Difference = adapter − system − signed battery flow. Process power includes CPU energy only, so the categories and apps are app CPU energy; “Display & system” is the rest of the system figure (display, GPU, memory, and macOS processes MenuSprite cannot read). The saved MenuSprite charge target is not an active system limit while control is off."
     }
 }
 

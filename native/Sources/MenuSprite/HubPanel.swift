@@ -74,6 +74,9 @@ enum HubTab: String, CaseIterable, Identifiable {
         case .tools: 540
         }
     }
+    /// The Power page carries the power flow's category pills and the grouped apps list; the
+    /// other pages keep the hub's usual width.
+    var preferredWidth: CGFloat { self == .power ? EnergyDocumentView.preferredWidth : 480 }
     static var available: [HubTab] {
         allCases.filter { !(BuildFeatures.publicPreview && $0 == .work) }
     }
@@ -119,7 +122,7 @@ final class HubPanelController: NSObject, NSWindowDelegate {
         let screen = anchorWindow?.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 900)
         let anchor = anchor ?? NSRect(x: visible.maxX - 20, y: visible.maxY + 6, width: 1, height: 1)
-        let width: CGFloat = 480
+        let width = model.tab.preferredWidth
         let height = height(for: model.tab, on: visible)
         let origin = NSPoint(x: min(max(anchor.midX - width / 2, visible.minX + 8), visible.maxX - width - 8),
                              y: max(visible.minY + 8, anchor.minY - height - 6))
@@ -156,15 +159,18 @@ final class HubPanelController: NSObject, NSWindowDelegate {
         max(300, min(tab.preferredHeight, visible.height - 20))
     }
 
-    /// Growing a tab keeps the panel pinned under the menu bar, the edge it is anchored to.
+    /// Growing a tab keeps the panel pinned under the menu bar, the edge it is anchored to, and
+    /// widens it about its centre (kept on screen) for the Power page.
     private func resize(for tab: HubTab) {
         guard let panel, let screen = panel.screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
-        let target = height(for: tab, on: visible)
+        let target = height(for: tab, on: visible), width = tab.preferredWidth
         var frame = panel.frame
-        guard abs(frame.height - target) > 0.5 else { return }
+        guard abs(frame.height - target) > 0.5 || abs(frame.width - width) > 0.5 else { return }
         frame.origin.y = max(visible.minY + 8, frame.maxY - target)
         frame.size.height = target
+        frame.origin.x = min(max(frame.midX - width / 2, visible.minX + 8), visible.maxX - width - 8)
+        frame.size.width = width
         panel.setFrame(frame, display: true, animate: false)
     }
 
@@ -237,6 +243,7 @@ struct HubActions {
     var openPermissions: () -> Void = {}
     var openPowerControls: () -> Void = {}
     var openWork: () -> Void = {}
+    var openIsland: () -> Void = {}
     var editSprite: (SpriteConfiguration) -> Void = { _ in }
 }
 

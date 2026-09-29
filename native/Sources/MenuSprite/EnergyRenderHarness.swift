@@ -27,9 +27,9 @@ enum EnergyRenderHarness {
         processes.start()
         let board = EnergyBoardController(monitoring: monitoring, processes: processes, power: power, id: nil, embedded: true,
                                           configure: {}, showPower: {}, close: {})
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 1180), styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: EnergyDocumentView.preferredWidth + 10, height: 1180), styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentViewController = board
-        window.setContentSize(NSSize(width: 440, height: 1180))
+        window.setContentSize(NSSize(width: EnergyDocumentView.preferredWidth + 10, height: 1180))
         board.document.previewLimit = 80
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(wait))
@@ -53,7 +53,17 @@ enum EnergyRenderHarness {
             for (name, adapter, battery, system) in cases {
                 var readings: [String: Reading] = ["battery.power": Reading(battery), "sensor.PSTR": Reading(system), "battery.charge": Reading(64)]
                 if let adapter { readings["sensor.PDTR"] = Reading(adapter) }
-                board.document.previewFlow = EnergyFlow(readings: readings)
+                let flow = EnergyFlow(readings: readings)
+                board.document.previewFlow = flow
+                // A made-up split of the system figure: one heavy app, three categories, the rest.
+                let apps: [PowerBreakdown.Entry] = [
+                    .init(kind: .app(id: "preview", iconPath: nil, symbol: "terminal", category: .development), title: "Claude Code", watts: system * 0.22),
+                    .init(kind: .category(.development), title: PowerCategory.development.title, watts: system * 0.12),
+                    .init(kind: .category(.browsing), title: PowerCategory.browsing.title, watts: system * 0.08),
+                    .init(kind: .category(.background), title: PowerCategory.background.title, watts: system * 0.03)]
+                var entries = apps + [.init(kind: .restOfMac, title: PowerBreakdown.restTitle, watts: system * 0.55)]
+                if let other = flow.difference, other >= 0.05 { entries.append(.init(kind: .outside, title: PowerBreakdown.outsideTitle, watts: other)) }
+                board.document.previewBreakdown = PowerBreakdown(entries: entries, attributed: system * 0.45)
                 board.document.updateLayers(); board.view.needsLayout = true; board.view.layoutSubtreeIfNeeded()
                 board.document.needsDisplay = true
                 try? await Task.sleep(for: .milliseconds(200))
@@ -64,8 +74,12 @@ enum EnergyRenderHarness {
                 try? rep.representation(using: .png, properties: [:])?.write(to: url)
                 report.append("\(name) → \(url.lastPathComponent) (flow \(Int(board.document.flowRect.height)) pt)")
             }
-            board.document.previewFlow = nil
+            board.document.previewFlow = nil; board.document.previewBreakdown = nil
             let flow = board.document.flow
+            for entry in board.document.breakdown.entries { report.append("  → \(entry.title) \(EnergyFlow.watts(entry.watts))") }
+            for section in board.document.appSections {
+                report.append("  [\(section.category.title) \(EnergyFlow.watts(section.total))] " + section.rows.map { "\($0.consumer.presentation.title) \(String(format: "%.2f", $0.value))" }.joined(separator: ", "))
+            }
             report.append("adapter \(EnergyFlow.watts(flow.adapter)) system \(EnergyFlow.watts(flow.system)) battery \(EnergyFlow.watts(flow.battery)) other \(EnergyFlow.watts(flow.difference)) charge \(flow.charge.map { "\($0)" } ?? "—")")
             report.append("apps ranked \(processes.ranked.count), top \(processes.ranked.first.map { "\($0.consumer.presentation.title) \($0.value)" } ?? "—")")
             board.stop(); processes.stop()

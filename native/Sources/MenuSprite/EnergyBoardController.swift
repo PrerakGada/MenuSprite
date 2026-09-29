@@ -71,7 +71,7 @@ final class EnergyBoardController: NSViewController {
         return monitoring.sprites.first { $0.id == id }?.enabled == true
     }
     override func loadView() {
-        let root = EnergyBackgroundView(frame: NSRect(x: 0, y: 0, width: 430, height: 830))
+        let root = EnergyBackgroundView(frame: NSRect(x: 0, y: 0, width: EnergyDocumentView.preferredWidth, height: 830))
         root.cornerRadius = embedded ? 0 : 18
         // Draw rounded window edges directly; clipping the whole animated layer
         // tree forces a large offscreen composition surface on this OS.

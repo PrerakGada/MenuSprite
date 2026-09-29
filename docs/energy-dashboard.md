@@ -1,5 +1,39 @@
 # Battery & Power dashboard — 10 September 2026
 
+## Where the power goes — 29 September 2026
+
+Prerak asked for more insight than one "System" figure: apps grouped by category, where the
+power goes on the right of the flow, and any app over about 2 W called out with its own icon.
+
+- **Right side of the flow** is now a labelled pill per destination (icon, name, watts), ordered by
+  watts: every app at **≥ 2 W with all its processes combined** (up to three, app icon when loaded),
+  then one pill per category, then **Display & system**, then **Other** (the adapter residual, as
+  before). A heavy app's watts are taken out of its category's pill, not counted twice. At most eight
+  pills; past that the smallest categories fold into "Other apps". Before the first process interval
+  the right side stays System + Other. The Mac node now carries the system watts.
+- **Display & system = `sensor.PSTR` − the summed per-app CPU energy.** It is large, and honestly so:
+  per-app readings are CPU energy only, and MenuSprite can read the counters of only its own user's
+  processes (802 of 1,570 on Nebula, 29 Sep). Display, GPU, memory, radios and root-owned macOS
+  processes (WindowServer, kernel) all land here. Live renders showed apps at 0.7–1.6 W of 10–17 W.
+  If the app sum exceeds PSTR (different sampling windows) no negative rest is drawn; nothing is scaled.
+- **Categories** (`SystemMonitoring/PowerCategory.swift`): Development, Browsing, Work & chat,
+  Media & design, Background, Other apps. Order of evidence: a curated bundle-ID list (declared
+  categories mislead — Arc, Safari and iTerm declare productivity, Claude and Superhuman developer
+  tools, Chrome and Nook nothing), then `LSApplicationCategoryType`, then `LSUIElement` /
+  `LSBackgroundOnly` → Background, `/System/` apps → Background. Processes with no app: Claude Code,
+  a VM, a known runtime (node, python, …), a toolchain path (Xcode, nvm, Homebrew, cargo…) or a
+  working folder under `~/Developer` → Development; anything else → Background. Info.plist is read
+  once per bundle while the dashboard lives. There is no user override yet.
+- **Apps card** is grouped into category sections, each header with the category's total (all its
+  apps, including those under 0.1 W and the heavy app). A heavy app's figure is bold.
+- **Width 560 pt** (was 430) wherever the dashboard shows (`EnergyDocumentView.preferredWidth`): the PWR
+  panel, and the hub while its Power page is selected — the hub's other pages stay 480 and the panel
+  widens about its centre on switching (`HubTab.preferredWidth`, `resize(for:)`). Pills scale to 30% of
+  the width (140–180 pt).
+- Checked off-screen only (`--energy-render`, which now also prints the breakdown and sections and
+  draws the four flow previews with a made-up split). A live heavy-app pill with a real app icon has
+  not been seen: nothing was drawing 2 W during the renders.
+
 ## AlDente look — 28 September 2026
 
 Prerak asked for the dashboard to look like AlDente Pro's (screenshots side by side; the
