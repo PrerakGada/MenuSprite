@@ -32,6 +32,7 @@ final class SpriteContextMenu: NSObject, NSMenuDelegate {
         if config.isBatteryItem { addBatterySection(to: menu) }
         add(menu, "Configure sprite…", #selector(configureSprite))
         add(menu, config.enabled ? "Pause readings" : "Resume readings", #selector(togglePaused))
+        add(menu, SpritePlacement.shared.isLeft(config.id) ? "Move to right side" : "Move to left side", #selector(togglePlacement))
         add(menu, "Hide from menu bar", #selector(hideItem))
         return menu
     }
@@ -174,4 +175,9 @@ final class SpriteContextMenu: NSObject, NSMenuDelegate {
     @objc private func configureSprite() { configure() }
     @objc private func togglePaused() { store.setEnabled(config.id, !config.enabled) }
     @objc private func hideItem() { store.setMenuBar(config.id, false) }
+    /// Deferred: moving rebuilds the sprite's item, and this runs while its menu is still unwinding.
+    @objc private func togglePlacement() {
+        let id = config.id
+        DispatchQueue.main.async { SpritePlacement.shared.setLeft(id, !SpritePlacement.shared.isLeft(id)) }
+    }
 }

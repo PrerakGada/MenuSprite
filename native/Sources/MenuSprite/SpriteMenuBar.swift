@@ -6,6 +6,10 @@ import SystemMonitoring
 final class SpriteMenuBar {
     private var items: [UUID: SpriteMenuItem] = [:]
     private var order: [UUID] = []
+    private var leftOrder: [UUID] = []
+    /// Sprites Prerak moved left are drawn here, over the frontmost app's menus; nil while none are.
+    private var strip: LeftStrip?
+    private let placement = SpritePlacement.shared
     private unowned let store: MonitoringStore
     private unowned let power: PowerStore
     private let showPower: () -> Void
@@ -15,11 +19,12 @@ final class SpriteMenuBar {
     init(store: MonitoringStore, power: PowerStore, showPower: @escaping () -> Void, openEditor: @escaping (SpriteConfiguration) -> Void) {
         self.store = store; self.power = power; self.showPower = showPower; self.openEditor = openEditor
         store.changed = { [weak self] in self?.update() }
+        placement.changed = { [weak self] in self?.update() }
         update()
     }
     var itemCount: Int { items.count }
     func readoutForValidation(_ id: UUID) -> (image: NSImage?, title: String, frame: NSRect?)? {
-        guard let button = items[id]?.item.button else { return nil }
+        guard let button = items[id]?.button else { return nil }
         return (button.image, button.attributedTitle.string,
                 button.window.map { $0.convertToScreen(button.convert(button.bounds, to: nil)) })
     }
@@ -43,25 +48,38 @@ final class SpriteMenuBar {
     func update() {
         let visible = store.sprites.filter(\.showInMenuBar)
         let ids = visible.map(\.id)
-        if ids != order {
+        let left = ids.filter(placement.isLeft)
+        if ids != order || left != leftOrder {
             for item in items.values { item.remove() }
             items = [:]
+            if left.isEmpty { strip?.tearDown(); strip = nil } else if strip == nil { strip = LeftStrip() }
             // Status items grow leftward from the main icon; reverse creation preserves
             // the user's left-to-right configuration order within this app's items.
             for config in visible.reversed() {
-                items[config.id] = SpriteMenuItem(config: config, store: store, power: power, showPower: showPower, openEditor: openEditor,
+                items[config.id] = SpriteMenuItem(config: config, strip: placement.isLeft(config.id) ? strip : nil,
+                                                  store: store, power: power, showPower: showPower, openEditor: openEditor,
                                                   openAccounts: { [weak self] anchor, window in self?.openAccounts?(anchor, window) })
             }
-            order = ids
+            strip?.arrange(left.compactMap { items[$0]?.button })
+            order = ids; leftOrder = left
         }
         for config in visible { items[config.id]?.update(config) }
+        strip?.relayout()
     }
-    func removeAll() { for item in items.values { item.remove() }; items = [:]; order = []; store.changed = nil }
+    func removeAll() {
+        for item in items.values { item.remove() }
+        items = [:]; order = []; leftOrder = []
+        strip?.tearDown(); strip = nil
+        store.changed = nil; placement.changed = nil
+    }
 }
 
 @MainActor
 private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegate {
-    let item: NSStatusItem
+    /// The right-side status item, or nil for a sprite on the left strip.
+    let item: NSStatusItem?
+    /// Where the sprite is drawn and clicked: the status item's button, or its button on the strip.
+    let button: NSButton
     private var config: SpriteConfiguration
     private unowned let store: MonitoringStore
     private unowned let power: PowerStore
@@ -77,6 +95,9 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
     private var renderedSignature = ""
     private var reservedWidths: [CGFloat] = []
     private var reservedSince: [Double] = []
+    /// A designed sprite's reserved text widths, by node.
+    private var designReserved: [String: CGFloat] = [:]
+    private var designReservedSince: [String: Double] = [:]
     /// A width kept for a value that no longer needs it is given up after this long, so one 100%
     /// reading does not hold an extra digit for the rest of the day.
     private static let reserveLifetime: Double = 90
@@ -84,19 +105,24 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
     private var contextMenu: SpriteContextMenu?
     private var lastRenderTime = 0.0
 
-    init(config: SpriteConfiguration, store: MonitoringStore, power: PowerStore, showPower: @escaping () -> Void, openEditor: @escaping (SpriteConfiguration) -> Void,
-         openAccounts: @escaping (NSRect?, NSWindow?) -> Void) {
+    init(config: SpriteConfiguration, strip: LeftStrip?, store: MonitoringStore, power: PowerStore, showPower: @escaping () -> Void,
+         openEditor: @escaping (SpriteConfiguration) -> Void, openAccounts: @escaping (NSRect?, NSWindow?) -> Void) {
         self.config = config; self.store = store; self.power = power; self.showPower = showPower; self.openEditor = openEditor
         self.openAccounts = openAccounts
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let strip {
+            item = nil; button = strip.makeButton()
+        } else {
+            let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            item = statusItem; button = statusItem.button ?? NSButton()
+        }
         super.init()
-        item.autosaveName = "MonitorSprite-\(config.id.uuidString)"
-        item.button?.target = self
-        item.button?.action = #selector(clicked)
+        item?.autosaveName = "MonitorSprite-\(config.id.uuidString)"
+        button.target = self
+        button.action = #selector(clicked)
         // Secondary click opens the sprite menu; on a battery item it switches Low Power Mode
         // instead, and control-click (or option-right-click) opens the charge-control menu.
         // Primary click keeps opening the board.
-        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         update(config)
         // macOS posts this when Low Power Mode changes, from any thread and from any cause.
         powerStateObserver = NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -109,9 +135,9 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
     func update(_ config: SpriteConfiguration) {
         let configurationChanged = self.config != config
         self.config = config
-        guard let button = item.button else { return }
         let now = ProcessInfo.processInfo.systemUptime
         guard configurationChanged || now - lastRenderTime >= config.interval else { return }
+        if config.enabled, config.design != nil { drawDesign(config, button: button, configurationChanged: configurationChanged, now: now); return }
         let text = store.menuText(config)
         let columns = store.menuColumns(config)
         // The ceiling is drawn only while the hardware is actually being limited, so the
@@ -173,6 +199,33 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         }
         button.setAccessibilityLabel("\(config.name): \(text)")
     }
+    /// A designed sprite: its tree drawn by `DesignRenderer`. Each text keeps the widest slot it has
+    /// needed lately, like the column reservation above, so values crossing a digit do not shuffle the bar.
+    private func drawDesign(_ config: SpriteConfiguration, button: NSButton, configurationChanged: Bool, now: Double) {
+        if configurationChanged { designReserved = [:]; designReservedSince = [:] }
+        guard let natural = store.renderDesign(config, ceiling: power.activeCeiling) else { return }
+        for (id, width) in natural.slotWidths
+        where width >= (designReserved[id] ?? 0) || now - (designReservedSince[id] ?? 0) > Self.reserveLifetime {
+            designReserved[id] = width; designReservedSince[id] = now
+        }
+        guard let output = store.renderDesign(config, reserved: designReserved, ceiling: power.activeCeiling) else { return }
+        let signature = "\(config.name)|\(output.signature)|\(Int(output.size.width))|\(output.isTemplate)"
+        lastRenderTime = now
+        guard signature != renderedSignature else { return }
+        renderedSignature = signature
+        button.attributedTitle = NSAttributedString(string: "")
+        button.image = output.image
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
+        lastSymbol = ""
+        if config.isBatteryItem {
+            let glyph = store.batteryGlyph(ceiling: power.activeCeiling)
+            button.toolTip = "\(glyph.summary) · \(power.limitStatus)\nClick for Battery & Power · right-click toggles Low Power Mode · control-click for charge controls"
+        } else {
+            button.toolTip = "\(config.name) — \(config.opensAccountsBoard ? "click for AI accounts" : "click for readings")"
+        }
+        button.setAccessibilityLabel("\(config.name): \(output.accessibilityText)")
+    }
     var hasVisibleMemoryPanel: Bool { memoryPanel?.isVisible == true }
     var boardView: NSView? {
         if memoryPanel?.isVisible == true { return memoryPanel?.contentViewController?.view }
@@ -203,6 +256,10 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
     private func showMenu() {
         closeBoard()
         if config.isBatteryItem { power.refreshBatteryStatus() }
+        guard let item else {
+            buildContextMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: button.isFlipped ? button.bounds.maxY + 5 : -5), in: button)
+            return
+        }
         // NSStatusItem only pops a menu it owns; attach it for this click and take it back after.
         item.menu = buildContextMenu()
         item.button?.performClick(nil)
@@ -210,11 +267,14 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
     }
     @objc func showBoard() {
         if popover?.isShown == true || memoryPanel?.isVisible == true { closeBoard(); return }
-        guard let button = item.button else { return }
         let configure: () -> Void = { [weak self] in
             guard let self else { return }
             self.closeBoard()
             self.openEditor(self.config)
+        }
+        if config.design?.board != nil {
+            showCustomBoard(button: button, configure: configure)
+            return
         }
         if config.opensAccountsBoard {
             let window = button.window
@@ -233,8 +293,22 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         popover = board
         store.openBoard(config.id)
         board.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        if item == nil { installDismissal() }
     }
-    private func showMemoryPanel(button: NSStatusBarButton, configure: @escaping () -> Void) {
+    /// The sprite's own board, designed in the studio, in a popover that fits its content.
+    private func showCustomBoard(button: NSButton, configure: @escaping () -> Void) {
+        let board = NSPopover()
+        board.behavior = .transient
+        board.delegate = self
+        let host = NSHostingController(rootView: CustomBoardPanel(store: store, power: power, id: config.id, configure: configure))
+        host.sizingOptions = [.preferredContentSize]
+        board.contentViewController = host
+        popover = board
+        store.openBoard(config.id)
+        board.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        if item == nil { installDismissal() }
+    }
+    private func showMemoryPanel(button: NSButton, configure: @escaping () -> Void) {
         let buttonWindow = button.window
         let screen = buttonWindow?.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 850)
@@ -244,7 +318,7 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
             ?? NSRect(x: visible.maxX - 20, y: visible.maxY + 6, width: 1, height: 1)
         let isEnergy = config.processPanelKind == .power
         let height = max(400, min(isEnergy ? 850 : 780, visible.height - 20))
-        let width: CGFloat = isEnergy ? 430 : 400
+        let width: CGFloat = isEnergy ? EnergyDocumentView.preferredWidth : 400
         let origin = NSPoint(x: min(max(anchor.midX - width / 2, visible.minX + 8), visible.maxX - width - 8),
                              y: max(visible.minY + 8, anchor.minY - height - 6))
         let panel = MemoryPanel(contentRect: NSRect(origin: origin, size: NSSize(width: width, height: height)),
@@ -272,17 +346,32 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         // The explicit measurement run keeps its window visible while the user
         // works in other apps. Normal popovers still dismiss on outside events.
         if CommandLine.arguments.contains("--energy-validate") || CommandLine.arguments.contains("--memory-validate") { return }
+        installDismissal()
+    }
+    /// A click on the sprite's own button toggles its board, so outside-click dismissal leaves it alone.
+    /// On the strip that is the button alone; the strip's other sprites count as outside.
+    private var pointerIsOverAnchor: Bool {
+        guard item == nil else { return PanelAnchor.pointerIsOver(button.window) }
+        guard let window = button.window, window.isVisible else { return false }
+        return window.convertToScreen(button.convert(button.bounds, to: nil)).insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation)
+    }
+    /// The open board's window: a process panel, or a popover opened from the strip.
+    private var boardWindow: NSWindow? { memoryPanel ?? popover?.contentViewController?.view.window }
+    /// Closes the board on a click elsewhere or when another app comes forward. A popover from a status
+    /// item gets this from macOS; a panel, or a popover from the strip, does not.
+    private func installDismissal() {
+        removeDismissal()
         if let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !PanelInteraction.isSuspended, !PanelAnchor.pointerIsOver(self.item.button?.window) else { return }
+                guard let self, !PanelInteraction.isSuspended, !self.pointerIsOverAnchor else { return }
                 self.closeBoard()
             }
         }) { panelEventMonitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
             MainActor.assumeIsolated {
                 guard !PanelInteraction.isSuspended else { return }
-                if let self, event.window !== self.memoryPanel, event.window !== self.item.button?.window,
-                   !PanelAnchor.pointerIsOver(self.item.button?.window) { self.closeBoard() }
+                if let self, event.window !== self.boardWindow, self.item == nil || event.window !== self.button.window,
+                   !self.pointerIsOverAnchor { self.closeBoard() }
             }
             return event
         }) { panelEventMonitors.append(local) }
@@ -302,12 +391,15 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
             panelObservers.append((workspace, observer))
         }
     }
+    private func removeDismissal() {
+        for monitor in panelEventMonitors { NSEvent.removeMonitor(monitor) }; panelEventMonitors = []
+        for (center, observer) in panelObservers { center.removeObserver(observer) }; panelObservers = []
+    }
     func windowWillClose(_ notification: Notification) {
         guard notification.object as? NSWindow === memoryPanel else { return }
         energyController?.stop(); energyController = nil
         memoryStore?.stop(); memoryStore = nil; store.closeBoard(config.id)
-        for monitor in panelEventMonitors { NSEvent.removeMonitor(monitor) }; panelEventMonitors = []
-        for (center, observer) in panelObservers { center.removeObserver(observer) }; panelObservers = []
+        removeDismissal()
         memoryPanel?.contentViewController = nil; memoryPanel?.delegate = nil; memoryPanel?.dismiss = nil; memoryPanel = nil
     }
     func popoverWillClose(_ notification: Notification) {
@@ -319,6 +411,7 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         guard notification.object as? NSPopover === popover else { return }
         memoryStore?.stop(); memoryStore = nil
         store.closeBoard(config.id)
+        if memoryPanel == nil { removeDismissal() }
         popover?.contentViewController = nil
         popover?.delegate = nil
         popover = nil
@@ -327,8 +420,9 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         closeBoard(); store.closeBoard(config.id)
         memoryStore?.stop(); memoryStore = nil
         popover?.contentViewController = nil; popover?.delegate = nil; popover = nil
-        item.button?.target = nil
-        NSStatusBar.system.removeStatusItem(item)
+        removeDismissal()
+        button.target = nil
+        if let item { NSStatusBar.system.removeStatusItem(item) } else { button.removeFromSuperview() }
     }
 }
 
@@ -410,5 +504,27 @@ private final class MemoryPanel: NSPanel {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.isReloadShortcut, let reload { reload(); return true }
         return super.performKeyEquivalent(with: event)
+    }
+}
+
+/// A custom board as a popover: scrolls once it is taller than the screen allows.
+private struct CustomBoardPanel: View {
+    @ObservedObject var store: MonitoringStore
+    let power: PowerStore
+    let id: UUID
+    let configure: () -> Void
+    @State private var height: CGFloat = 200
+
+    var body: some View {
+        if let config = store.sprites.first(where: { $0.id == id }) {
+            let width = config.design?.board?.width ?? 360
+            let limit = (NSScreen.main?.visibleFrame.height ?? 900) - 80
+            ScrollView {
+                BoardView(config: config, environment: BoardEnvironment(monitoring: store, power: power), configure: configure)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+            }
+            .scrollDisabled(height <= limit)
+            .frame(width: width, height: min(max(height, 60), limit))
+        }
     }
 }
