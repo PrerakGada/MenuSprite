@@ -18,7 +18,7 @@ Public preview for Apple Silicon Macs on macOS 26+:
 brew install --cask prerakgada/tap/menusprite
 ```
 
-[Download and release notes](https://github.com/PrerakGada/menusprite-releases/releases/tag/v0.5.6-preview.1).
+[Download and release notes](https://github.com/PrerakGada/menusprite-releases/releases/tag/v0.5.7-preview.1).
 Developer ID-signed and notarized; this preview excludes privileged battery and
 closed-lid controls. [Release verification](docs/release.md).
 

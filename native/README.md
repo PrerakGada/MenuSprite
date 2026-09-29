@@ -13,7 +13,7 @@ with client assignments, billable time/rates, manual entries and CSV export. Lau
 
 ## Public preview
 
-MenuSprite 0.5.6 Preview 1 is published for Apple Silicon / macOS 26+:
+MenuSprite 0.5.7 Preview 1 is published for Apple Silicon / macOS 26+:
 
 ```sh
 brew install --cask prerakgada/tap/menusprite
@@ -52,7 +52,7 @@ Do not use `swift run` to validate permissions: it is not the installed app cont
 
 - Bundle ID: `in.prerakgada.MenuSprite`.
 - Installed location: `~/Applications/MenuSprite.app`.
-- App version/build: `0.5.6` (17), shared by local and public builds. Public packaging
+- App version/build: `0.5.7` (18), shared by local and public builds. Public packaging
   checks this against `distribution/version.json`; the signing identities remain separate.
 - Local signing identity: `Apple Development: Prerak Gada (X38RF8Q3T4)`;
   the certificate's team is `RC63N3VU27` (MIND WEALTH).

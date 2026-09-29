@@ -14,7 +14,7 @@ brew install --cask prerakgada/tap/menusprite
 open -a MenuSprite
 ```
 
-Or [download the signed, notarized DMG](https://github.com/PrerakGada/menusprite-releases/releases/download/v0.5.6-preview.1/MenuSprite-0.5.6-preview.1-arm64-installer3.dmg):
+Or [download the signed, notarized DMG](https://github.com/PrerakGada/menusprite-releases/releases/download/v0.5.7-preview.1/MenuSprite-0.5.7-preview.1-arm64-installer3.dmg):
 
 1. Open the downloaded disk image.
 2. Drag **MenuSprite** onto the **Applications** shortcut in the installer window.
@@ -26,7 +26,7 @@ Use `brew upgrade --cask menusprite` for future updates; this preview has no in-
 updater.
 
 The ZIP remains available for Homebrew and existing download links. Both formats
-contain the same 0.5.6 (17) app.
+contain the same 0.5.7 (18) app.
 
 ## Public preview
 
