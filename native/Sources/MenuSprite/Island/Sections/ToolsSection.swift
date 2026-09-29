@@ -77,6 +77,17 @@ final class ToolsSection: IslandSection {
                                  close: { [weak self] in self?.closeFromUtility() }))
     }
 
+    /// Settings › Content › Tools: the same editor the island's "Customize tools" opens — remove, reorder,
+    /// add back, pin apps, record the two shortcuts — on the island's black so it reads the same.
+    func options() -> AnyView? {
+        AnyView(ToolsEditView(model: model, preferences: model.preferences, columns: 4,
+                              chooseApps: { [weak self] in self?.model.chooseApps(above: .normal) })
+            .padding(14)
+            .frame(height: 380)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.black))
+            .environment(\.colorScheme, .dark))
+    }
+
     func headerAccessory(_ context: IslandPageContext) -> AnyView? {
         AnyView(ToolsCustomizeButton(model: model))
     }

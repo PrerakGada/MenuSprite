@@ -84,17 +84,17 @@ final class BatteryModule: ObservableObject, IslandFeature {
     init(environment: IslandEnvironment) {
         self.environment = environment
         environment.register(rest: .battery, IslandRestProvider { [weak self] in
-            guard let self, SystemCard.hasBattery else { return nil }
+            guard let self, SystemCardSupport.hasBattery else { return nil }
             return (AnyView(BatteryRestLeft(module: self)), AnyView(BatteryRestRight(module: self)))
         })
         environment.register(indicator: .battery) {
-            SystemCard.hasBattery ? .available : .unavailable("This Mac has no battery.")
+            SystemCardSupport.hasBattery ? .available : .unavailable("This Mac has no battery.")
         }
     }
 
     private var wanted: Bool {
         let settings = environment.settings
-        return SystemCard.hasBattery && (settings.atRest == .battery || settings.indicators.contains(.battery))
+        return SystemCardSupport.hasBattery && (settings.atRest == .battery || settings.indicators.contains(.battery))
     }
 
     func islandDidStart() {

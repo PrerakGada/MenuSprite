@@ -34,6 +34,15 @@ Downloads, Scratchpad, AI Agents. Each can be hidden and reordered (Settings ›
 fixed letter opens it; Explore (⌘K) shows them all. Feature modules without a page: volume and
 brightness keys and notices, keyboard light, microphone mute, battery, accessory alerts, keep awake.
 
+## Customising the System and Tools pages
+
+- **System:** every card is configurable in Settings › Content › System — any reading from MenuSprite's
+  catalog, a title, and under the value nothing, a bar (from the card's own percentage or another one,
+  optionally filled with what is left) or a second reading. Up to twelve cards, drag to reorder, "Reset
+  to default" returns the original eight. Saved as `MenuSprite.Island.System.cards`; the page samples
+  only the readings its cards show. (Vorssaint's System page has no options; this is MenuSprite's own.)
+- **Tools:** Settings › Content › Tools carries the same editor as the island's "Customize tools".
+
 ## Behaviour worth knowing
 
 - **Closed:** the camera, or the camera with 44-pt wings for the At rest choice (Nothing, Battery,

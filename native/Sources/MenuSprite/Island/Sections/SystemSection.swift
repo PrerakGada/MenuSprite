@@ -1,133 +1,171 @@
+import Combine
 import IslandKit
 import SwiftUI
 import SystemMonitoring
 
-/// CPU, GPU, memory, battery, network, disk, power and fans as cards. Samples through the shared
-/// monitor only while the page is on screen; a card opens the matching hub page.
+/// Cards of live readings: by default CPU, GPU, memory, battery, network, disk, power and fans, and any
+/// reading from MenuSprite's catalog once customised (Settings › Content › System). Samples through the
+/// shared monitor only while the page is on screen, and only the readings its cards show; a card opens
+/// the matching hub page.
 @MainActor
 final class SystemSection: IslandSection {
     let id = IslandSectionID.system
     private unowned let environment: IslandEnvironment
+    let store: IslandSystemLayoutStore
     static let owner = "island.system"
+    private var visible = false
+    private var observation: AnyCancellable?
 
-    init(environment: IslandEnvironment) { self.environment = environment }
+    init(environment: IslandEnvironment) {
+        self.environment = environment
+        store = IslandSystemLayoutStore(defaults: environment.isHeadless ? nil : .standard)
+        observation = store.$layout.dropFirst().sink { [weak self] _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.layoutChanged() } }
+        }
+    }
 
     var availability: IslandAvailability { .available }
 
-    static let metricIDs: Set<String> = ["cpu.usage", "gpu.usage", "memory.usage", "memory.used", "memory.total",
-                                         "battery.charge", "battery.state", "network.download", "network.upload",
-                                         "disk.available", "disk.usage", "sensor.PSTR", "battery.adapterRated", "sensor.fanSpeed"]
-
     func pageHeight(_ context: IslandPageContext) -> IslandPageHeight {
-        let cards = SystemCard.available(in: environment.monitoring)
-        return .fixed(SystemGrid.height(count: cards.count, width: context.width))
+        .fixed(CGFloat(IslandSystemGrid.pageHeight(count: shownCards.count, width: Double(context.width))))
     }
 
     func page(_ context: IslandPageContext) -> AnyView {
-        AnyView(SystemPage(monitoring: environment.monitoring, context: context, open: { [weak environment] tab in
+        AnyView(SystemPage(monitoring: environment.monitoring, store: store, context: context, open: { [weak environment] tab in
             environment?.showHubTab(tab)
         }))
     }
 
-    func pageDidAppear() { environment.monitoring.setSurfaceMetrics(Self.owner, Self.metricIDs, interval: 2) }
-    func pageDidDisappear() { environment.monitoring.setSurfaceMetrics(Self.owner, []) }
+    func options() -> AnyView? { AnyView(SystemCardsEditor(store: store, monitoring: environment.monitoring)) }
+
+    /// Cards whose reading this Mac can report: no battery card on a desktop, no fan card without fans.
+    var shownCards: [IslandSystemCard] { SystemCardSupport.shown(store.layout.cards, in: environment.monitoring) }
+
+    func pageDidAppear() {
+        visible = true
+        environment.monitoring.setSurfaceMetrics(Self.owner, store.layout.metricIDs.union(["battery.state"]), interval: 2)
+    }
+
+    func pageDidDisappear() {
+        visible = false
+        environment.monitoring.setSurfaceMetrics(Self.owner, [])
+    }
+
     func islandDidStop() { pageDidDisappear() }
+
+    private func layoutChanged() {
+        if visible { pageDidAppear() }
+        environment.invalidate()
+    }
 }
 
-enum SystemCard: String, CaseIterable, Identifiable {
-    case cpu, gpu, memory, battery, network, disk, power, fans
-    var id: String { rawValue }
+/// The System page's cards, saved under `MenuSprite.Island.System.cards`. Headless renders keep them
+/// in memory only.
+@MainActor
+final class IslandSystemLayoutStore: ObservableObject {
+    static let key = "MenuSprite.Island.System.cards"
+    @Published private(set) var layout: IslandSystemLayout
+    private let defaults: UserDefaults?
 
-    var title: String {
-        switch self {
-        case .cpu: "CPU"
-        case .gpu: "GPU"
-        case .memory: "Memory"
-        case .battery: "Battery"
-        case .network: "Network"
-        case .disk: "Disk available"
-        case .power: "Power"
-        case .fans: "Fans"
+    init(defaults: UserDefaults?) {
+        self.defaults = defaults
+        if let data = defaults?.data(forKey: Self.key), let saved = try? JSONDecoder().decode(IslandSystemLayout.self, from: data) {
+            layout = saved
+        } else {
+            layout = .standard
         }
     }
 
-    var symbol: String {
-        switch self {
-        case .cpu: "cpu"
-        case .gpu: "display"
-        case .memory: "memorychip"
-        case .battery: "battery.100percent"
-        case .network: "network"
-        case .disk: "internaldrive"
-        case .power: "powerplug"
-        case .fans: "fanblades"
-        }
+    func update(_ change: (inout IslandSystemLayout) -> Void) {
+        var copy = layout
+        change(&copy)
+        guard copy != layout else { return }
+        layout = copy
+        if let data = try? JSONEncoder().encode(copy) { defaults?.set(data, forKey: Self.key) }
     }
 
-    var hubTab: HubTab {
-        switch self {
-        case .cpu, .gpu, .memory, .fans: .system
-        case .battery, .power: .power
-        case .network: .network
-        case .disk: .disk
-        }
+    func reset() {
+        layout = .standard
+        defaults?.removeObject(forKey: Self.key)
     }
+}
 
-    /// Cards only for readings this Mac reports: battery only with a battery, fans only with fans.
-    @MainActor static func available(in monitoring: MonitoringStore) -> [SystemCard] {
-        allCases.filter { card in
-            switch card {
-            case .battery: monitoring.readings["battery.charge"]?.number != nil || monitoring.readings["battery.charge"] == nil && hasBattery
-            case .fans: monitoring.readings["sensor.fanSpeed"]?.number != nil
-            default: true
-            }
-        }
-    }
-
+/// How a reading is drawn on a card: its symbol, the hub page it opens, and which cards this Mac can show.
+enum SystemCardSupport {
     static let hasBattery: Bool = {
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
         defer { if service != 0 { IOObjectRelease(service) } }
         return service != 0
     }()
-}
 
-enum SystemGrid {
-    static let minWidth: CGFloat = 128
-    static let height: CGFloat = 72
-    static let spacing: CGFloat = 10
-
-    static func columns(width: CGFloat) -> Int { max(1, Int((width + spacing) / (minWidth + spacing))) }
-
-    /// Balanced rows in reading order: 8 cards in 3 columns → 3, 3, 2.
-    static func rows(count: Int, width: CGFloat) -> [Int] {
-        guard count > 0 else { return [] }
-        let columns = columns(width: width)
-        let rowCount = Int(ceil(Double(count) / Double(columns)))
-        let base = count / rowCount, extra = count % rowCount
-        return (0..<rowCount).map { $0 < extra ? base + 1 : base }
+    @MainActor static func shown(_ cards: [IslandSystemCard], in monitoring: MonitoringStore) -> [IslandSystemCard] {
+        cards.filter { card in
+            if card.metricID.hasPrefix("battery.") { return hasBattery }
+            if card.metricID.hasPrefix("sensor.fan") {
+                // Fans only when the Mac reports them; unknown until the first sample, so keep it until then.
+                guard let reading = monitoring.readings[card.metricID] else { return true }
+                return reading.number != nil
+            }
+            return true
+        }
     }
 
-    static func height(count: Int, width: CGFloat) -> CGFloat {
-        let rows = rows(count: count, width: width).count
-        return rows == 0 ? 140 : CGFloat(rows) * height + CGFloat(rows - 1) * spacing
+    static func symbol(for metric: Metric) -> String {
+        let id = metric.id
+        if id.hasPrefix("cpu.") { return "cpu" }
+        if id.hasPrefix("gpu.") { return "display" }
+        if id.hasPrefix("memory.") { return "memorychip" }
+        if id.hasPrefix("battery.") { return metric.unit == .watts ? "powerplug" : "battery.100percent" }
+        if id.hasPrefix("network.") { return "network" }
+        if id.hasPrefix("disk.") { return "internaldrive" }
+        if id.localizedCaseInsensitiveContains("fan") { return "fanblades" }
+        if metric.unit == .celsius { return "thermometer.medium" }
+        if metric.unit == .watts || metric.unit == .volts || metric.unit == .amps { return "powerplug" }
+        return metric.group.icon
+    }
+
+    static func hubTab(for metric: Metric) -> HubTab {
+        switch metric.group {
+        case .network: .network
+        case .disk: .disk
+        case .battery: .power
+        case .ai: .ai
+        case .sensors: metric.unit == .watts ? .power : .system
+        case .cpu, .gpu, .memory, .system: .system
+        }
+    }
+
+    /// Network rates carry their arrow ("↓ 3.0 MB/s"); every other value stands alone.
+    static func arrow(for metric: Metric) -> String? {
+        metric.shortName == "↓" || metric.shortName == "↑" ? metric.shortName : nil
     }
 }
 
 private struct SystemPage: View {
     @ObservedObject var monitoring: MonitoringStore
+    @ObservedObject var store: IslandSystemLayoutStore
     let context: IslandPageContext
     let open: (HubTab) -> Void
 
     var body: some View {
-        let cards = SystemCard.available(in: monitoring)
-        let rows = SystemGrid.rows(count: cards.count, width: context.width)
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: SystemGrid.spacing) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { index, count in
-                    let start = rows.prefix(index).reduce(0, +)
-                    HStack(spacing: SystemGrid.spacing) {
-                        ForEach(cards[start..<start + count]) { card in
-                            SystemCardView(card: card, monitoring: monitoring) { open(card.hubTab) }
+        let cards = SystemCardSupport.shown(store.layout.cards, in: monitoring)
+        let rows = IslandSystemGrid.rows(count: cards.count, width: Double(context.width))
+        Group {
+            if cards.isEmpty {
+                IslandUnavailableView(symbol: "gauge.with.dots.needle.50percent",
+                                      message: "No cards yet. Add readings in Settings › Content › System.")
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: CGFloat(IslandSystemGrid.spacing)) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { index, count in
+                            let start = rows.prefix(index).reduce(0, +)
+                            HStack(spacing: CGFloat(IslandSystemGrid.spacing)) {
+                                ForEach(cards[start..<start + count]) { card in
+                                    SystemCardView(card: card, monitoring: monitoring) {
+                                        open(SystemCardSupport.hubTab(for: monitoring.metric(card.metricID)))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -138,70 +176,66 @@ private struct SystemPage: View {
 }
 
 private struct SystemCardView: View {
-    let card: SystemCard
+    let card: IslandSystemCard
     @ObservedObject var monitoring: MonitoringStore
     let action: () -> Void
 
     var body: some View {
-        let reading = content
+        let metric = monitoring.metric(card.metricID)
+        let secondLine = secondReading
         Button(action: action) {
             VStack(alignment: .leading, spacing: 4) {
-                Label(card.title, systemImage: symbol)
+                Label(card.title.isEmpty ? metric.name : card.title, systemImage: symbol(metric))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(IslandStyle.secondaryText)
-                Text(reading.value)
-                    .font(.system(size: reading.detail == nil ? 22 : 15, weight: .medium, design: .rounded).monospacedDigit())
+                    .lineLimit(1)
+                Text(value(metric))
+                    .font(.system(size: secondLine == nil ? 22 : 15, weight: .medium, design: .rounded).monospacedDigit())
                     .foregroundStyle(.white)
                     .contentTransition(.numericText())
-                    .animation(.smooth(duration: 0.25), value: reading.value)
+                    .animation(.smooth(duration: 0.25), value: value(metric))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                if let detail = reading.detail {
-                    Text(detail).font(.system(size: 11)).foregroundStyle(IslandStyle.secondaryText).lineLimit(1)
-                } else if let meter = reading.meter {
-                    IslandMeter(value: meter, tint: reading.attention ? .orange : .white, height: 4)
+                if let secondLine {
+                    Text(secondLine).font(.system(size: 11)).foregroundStyle(IslandStyle.secondaryText).lineLimit(1)
+                } else if card.detail == .bar {
+                    let percent = monitoring.readings[card.barMetricID]?.number
+                    IslandMeter(value: percent.map { card.barFraction(percent: $0) } ?? 0,
+                                tint: percent.map { card.barWantsAttention(percent: $0, onBattery: onBattery) } == true ? .orange : .white,
+                                height: 4)
                 }
             }
             .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: SystemGrid.height, maxHeight: SystemGrid.height, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: CGFloat(IslandSystemGrid.height), maxHeight: CGFloat(IslandSystemGrid.height),
+                   alignment: .leading)
             .background(RoundedRectangle(cornerRadius: IslandStyle.cardRadius, style: .continuous).fill(IslandStyle.surface))
         }
         .buttonStyle(IslandButtonStyle(cornerRadius: IslandStyle.cardRadius))
+        .help(metric.detail)
     }
 
-    private var symbol: String {
-        if card == .battery, monitoring.readings["battery.state"]?.text?.localizedCaseInsensitiveContains("charg") == true {
+    private var onBattery: Bool {
+        monitoring.readings["battery.state"]?.text?.localizedCaseInsensitiveContains("battery") ?? false
+    }
+
+    private func symbol(_ metric: Metric) -> String {
+        if metric.id == "battery.charge", monitoring.readings["battery.state"]?.text?.localizedCaseInsensitiveContains("charg") == true {
             return "battery.100percent.bolt"
         }
-        return card.symbol
+        return SystemCardSupport.symbol(for: metric)
     }
 
-    private func value(_ id: String) -> Double? { monitoring.readings[id]?.number }
+    private func value(_ metric: Metric) -> String {
+        guard let reading = monitoring.readings[metric.id], reading.number != nil || reading.text != nil else { return "…" }
+        if metric.unit == .percent, let number = reading.number { return "\(Int(number.rounded()))%" }
+        let text = monitoring.display(metric.id)
+        return SystemCardSupport.arrow(for: metric).map { "\($0) \(text)" } ?? text
+    }
 
-    private var content: (value: String, detail: String?, meter: Double?, attention: Bool) {
-        func percent(_ id: String) -> (String, Double?) {
-            guard let v = value(id) else { return ("…", nil) }
-            return ("\(Int(v.rounded()))%", v / 100)
-        }
-        switch card {
-        case .cpu, .gpu, .memory:
-            let id = card == .cpu ? "cpu.usage" : (card == .gpu ? "gpu.usage" : "memory.usage")
-            let (text, fraction) = percent(id)
-            return (text, nil, fraction ?? 0, (fraction ?? 0) >= 0.85)
-        case .battery:
-            let (text, fraction) = percent("battery.charge")
-            let onAC = monitoring.readings["battery.state"]?.text.map { !$0.localizedCaseInsensitiveContains("battery") } ?? false
-            return (text, nil, fraction ?? 0, (fraction ?? 1) <= 0.2 && !onAC)
-        case .network:
-            return ("↓ " + monitoring.display("network.download", compact: true), "↑ " + monitoring.display("network.upload", compact: true), nil, false)
-        case .disk:
-            let free = value("disk.usage").map { 1 - $0 / 100 }
-            return (value("disk.available") == nil ? "…" : monitoring.display("disk.available"), nil, free ?? 0, (free ?? 1) < 0.1)
-        case .power:
-            let detail = value("battery.adapterRated").map { "Adapter \(Int($0.rounded())) W" }
-            return (value("sensor.PSTR") == nil ? "…" : monitoring.display("sensor.PSTR"), detail, nil, false)
-        case .fans:
-            return (value("sensor.fanSpeed") == nil ? "…" : monitoring.display("sensor.fanSpeed"), nil, nil, false)
-        }
+    private var secondReading: String? {
+        guard card.detail == .reading, !card.detailMetricID.isEmpty else { return nil }
+        let metric = monitoring.metric(card.detailMetricID)
+        guard let reading = monitoring.readings[metric.id], reading.number != nil || reading.text != nil else { return nil }
+        return "\(metric.shortName) \(monitoring.display(metric.id))"
     }
 }

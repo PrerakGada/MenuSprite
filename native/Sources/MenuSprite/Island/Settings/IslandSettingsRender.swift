@@ -47,6 +47,7 @@ enum IslandSettingsRender {
             Shot(name: "content-controls", tab: .content, prepare: { _, store, _ in store.update { $0 = reset($0) } }),
             Shot(name: "content-system", tab: .content, section: .system, wait: 3, prepare: { model, _, _ in model.windowVisible = true }),
             Shot(name: "content-clipboard", tab: .content, section: .clipboard, prepare: { model, _, _ in model.windowVisible = false }),
+            Shot(name: "content-tools", tab: .content, section: .tools),
             Shot(name: "activity", tab: .activity, prepare: { model, _, _ in model.accessibilityTrusted = false }),
             Shot(name: "behavior", tab: .behavior),
             Shot(name: "behavior-full", tab: .behavior, size: CGSize(width: 1040, height: 1560), prepare: { _, store, _ in
