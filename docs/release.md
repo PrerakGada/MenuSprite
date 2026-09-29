@@ -1,6 +1,6 @@
 # Public Homebrew preview
 
-**Current: MenuSprite 0.5.5 Preview 1 (16), released 13 September 2026.**
+**Current: MenuSprite 0.5.7 Preview 1 (18), released 29 September 2026.**
 Signed and notarized for Apple Silicon Macs running macOS 26 or newer.
 
 ```sh
@@ -11,9 +11,9 @@ Update an existing Homebrew installation with `brew update`, then
 `brew upgrade --cask prerakgada/tap/menusprite`.
 
 - [Website and DMG installation guide](https://menusprite.prerakgada.in/#download)
-- [GitHub release and checksums](https://github.com/PrerakGada/menusprite-releases/releases/tag/v0.5.5-preview.1)
+- [GitHub release and checksums](https://github.com/PrerakGada/menusprite-releases/releases/tag/v0.5.7-preview.1)
 - [Homebrew cask](https://github.com/PrerakGada/homebrew-tap/blob/main/Casks/menusprite.rb)
-- [Full 0.5.5 verification record](release-0.5.5.md)
+- [Full 0.5.7 verification record](release-0.5.7.md) · [0.5.6](release-0.5.6.md) · [0.5.5](release-0.5.5.md)
 - [Historical 0.4.0 release](release-0.4.0.md)
 
 ## Public scope
@@ -39,7 +39,9 @@ Artifacts and reports live under `native/.build/distribution/<release_tag>/`.
 
 ```sh
 MENUSPRITE_NOTARY_PROFILE=menusprite-notary ./scripts/package-release.sh
-# Validate the exact final ZIP via --release-validate and the version's validation-public directory.
+# Validate the exact final ZIP via --release-validate and the version's validation-public directory,
+# then run --sprite-studio-render --from <previous release's validation-public/test-config.json> on it
+# to check what upgrading users' sprites turn into (see release-0.5.7.md).
 ./scripts/publish-release.sh
 ```
 
