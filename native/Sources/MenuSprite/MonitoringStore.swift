@@ -44,6 +44,10 @@ final class MonitoringStore: ObservableObject {
     private var aiLastCheck: Date?
     private var aiCheckedIDs: Set<String> = []
     private var aiSnapshots: [AIProvider: UsageSnapshot] = [:]
+    /// Commands behind sprite variables; they run only while a sprite or the studio needs them.
+    let commands = CommandVariableRunner()
+    /// The design open in the studio, sampled while it is shown even if unsaved.
+    private var previewDesign: SpriteDesign?
     var changed: (() -> Void)?
 
     /// Claude Code re-reads its keychain login on a 30-second cache, so checking the live login more
@@ -68,6 +72,7 @@ final class MonitoringStore: ObservableObject {
             catalog.append(Metric("cpu.core.\(index)", "CPU core \(index + 1) usage", "Core \(index + 1)", .cpu, .percent,
                 "Logical core index from Mach. Performance/efficiency identity is not inferred from its position.", source: "host_processor_info core \(index)", advanced: true))
         }
+        commands.changed = { [weak self] in self?.objectWillChange.send(); self?.changed?() }
         load()
     }
     func start() { schedule() }
@@ -89,6 +94,12 @@ final class MonitoringStore: ObservableObject {
         schedule()
     }
     func preview(_ ids: [String]) { editorIDs = Set(ids); schedule() }
+    /// Samples what the studio's draft shows and compares, including its commands; nil stops it.
+    func preview(design: SpriteDesign?) {
+        previewDesign = design
+        editorIDs = Set((design?.displayedReadingIDs ?? []) + (design?.ruleOnlyReadingIDs ?? []) + (design?.boardReadingIDs ?? []))
+        schedule()
+    }
     func openBoard(_ id: UUID) { boards.insert(id); schedule() }
     /// The hub samples only what its visible tab shows; an empty set stops that demand entirely.
     func setHubMetrics(_ ids: Set<String>, interval: Double = 2) {
@@ -125,6 +136,7 @@ final class MonitoringStore: ObservableObject {
     }
     func menuText(_ config: SpriteConfiguration) -> String {
         guard config.enabled else { return "Paused" }
+        if let design = config.design { return designText(design) }
         return readoutColumns(config, ids: config.metricIDs).map { column in
             return config.showLabels ? "\(column.label) \(column.value)" : column.value
         }.joined(separator: "  ")
@@ -187,7 +199,9 @@ final class MonitoringStore: ObservableObject {
     }
     func edit(_ config: SpriteConfiguration) { editingSprite = config; isShowingEditor = true }
     func save(_ value: SpriteConfiguration) {
-        var config = value; config.normalize()
+        var config = value
+        if Self.migratesDesignsOnLoad, config.design == nil { config.design = SpriteDesign.migrated(from: config, metric: knownMetric) }
+        config.normalize()
         if let index = sprites.firstIndex(where: { $0.id == config.id }) { sprites[index] = config }
         else { sprites.append(config) }
         persist(); changed?(); schedule()
@@ -227,7 +241,9 @@ final class MonitoringStore: ObservableObject {
     }
 
     private func load() {
-        guard FileManager.default.fileExists(atPath: configurationURL.path) else { sprites = SpriteConfiguration.initial; persist(); return }
+        guard FileManager.default.fileExists(atPath: configurationURL.path) else {
+            sprites = SpriteConfiguration.initial; migrateDesigns(backup: false); persist(); return
+        }
         do {
             let data = try Data(contentsOf: configurationURL)
             let saved = try JSONDecoder().decode(Saved.self, from: data)
@@ -239,6 +255,7 @@ final class MonitoringStore: ObservableObject {
                 if !sprites.contains(where: \.isBatteryItem) { sprites.append(.battery) }
                 persist()
             }
+            migrateDesigns(backup: true)
         } catch {
             // Preserve the original bytes before allowing an edit to replace corrupt state.
             let backup = configurationURL.deletingPathExtension().appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970)).json")
@@ -306,6 +323,7 @@ final class MonitoringStore: ObservableObject {
         for config in sprites where config.enabled {
             var ids = config.processPanelKind == .power ? config.metricIDs + ["battery.charge", "battery.temperature"] : config.metricIDs
             if config.colorRule == .memoryPressure { ids.append("memory.pressure") }
+            if let design = config.design { ids += design.ruleOnlyReadingIDs }
             for id in ids { result[id] = min(result[id] ?? 60, config.interval) }
         }
         if libraryOpen {
@@ -317,7 +335,12 @@ final class MonitoringStore: ObservableObject {
         }
         for id in boards {
             guard let config = sprites.first(where: { $0.id == id }), config.enabled else { continue }
-            let ids = config.processPanelKind?.metricIDs ?? config.metricIDs
+            var ids = config.processPanelKind?.metricIDs ?? config.metricIDs
+            // A custom board samples what its blocks show instead of the classic panel's readings.
+            if let design = config.design, let board = design.board {
+                ids = config.metricIDs + design.ruleOnlyReadingIDs + design.boardReadingIDs
+                if board.root.flattened.contains(where: { $0.kind == .energy }) { ids += ProcessPanelKind.power.metricIDs }
+            }
             for metricID in ids { result[metricID] = min(result[metricID] ?? 60, config.interval) }
         }
         return result
@@ -340,6 +363,7 @@ final class MonitoringStore: ObservableObject {
         task?.cancel(); task = nil
         aiTask?.cancel(); aiTask = nil
         let requested = demand()
+        commands.setDemand(suspended ? [] : commandDemand())
         guard !requested.isEmpty, !suspended else {
             isSampling = false; aiForcePending = false
             Task { await sampler.idle() }
@@ -503,4 +527,146 @@ final class MonitoringStore: ObservableObject {
 
 extension SpriteConfiguration {
     var isMemoryBoard: Bool { !metricIDs.isEmpty && metricIDs.allSatisfy { $0.hasPrefix("memory.") } }
+}
+
+// MARK: - Designs
+
+extension MonitoringStore {
+    /// Gives every sprite saved before the studio a design that draws what it drew. The file is copied
+    /// aside once first, and the old settings stay in it, so an older build still reads it.
+    /// Sprites saved before the studio are converted on load (the settings stay, for older builds).
+    static let migratesDesignsOnLoad = true
+
+    fileprivate func migrateDesigns(backup: Bool) {
+        guard Self.migratesDesignsOnLoad, sprites.contains(where: { $0.design == nil }) else { return }
+        if backup, FileManager.default.fileExists(atPath: configurationURL.path) {
+            let stamp = Date().formatted(.iso8601.year().month().day().dateSeparator(.omitted)) + "-\(Int(Date().timeIntervalSince1970) % 100_000)"
+            let copy = configurationURL.deletingLastPathComponent().appendingPathComponent("monitoring.before-sprite-studio-\(stamp).json")
+            try? FileManager.default.copyItem(at: configurationURL, to: copy)
+        }
+        sprites = sprites.map { config in
+            guard config.design == nil else { return config }
+            var value = config
+            value.design = SpriteDesign.migrated(from: config, metric: { [weak self] id in self?.knownMetric(id) })
+            value.normalize()
+            return value
+        }
+        persist()
+    }
+
+    /// A catalog entry, or nil for a reading this Mac has not reported (the migration then keeps the id).
+    func knownMetric(_ id: String) -> Metric? { catalog.first { $0.id == id } }
+
+    /// Every command a running sprite or the studio's draft needs.
+    func commandDemand() -> Set<CommandSource> {
+        var result = Set(sprites.filter(\.enabled).flatMap { $0.design?.commandVariables.compactMap(\.command) ?? [] })
+        if let previewDesign {
+            result.formUnion(previewDesign.commandVariables.compactMap(\.command))
+            result.formUnion(previewDesign.boardScriptCommands)
+        }
+        // Script rows run only while their board is open.
+        for id in boards { if let config = sprites.first(where: { $0.id == id }), config.enabled { result.formUnion(config.design?.boardScriptCommands ?? []) } }
+        return result
+    }
+
+    /// The live values a design draws from, captured now.
+    func designValues(_ design: SpriteDesign) -> DesignValues {
+        var metrics: [String: Metric] = [:]
+        var paces: [String: String] = [:]
+        var results: [String: CommandResult] = [:]
+        for variable in design.variables {
+            if let id = variable.readingID {
+                metrics[id] = metric(id)
+                if metric(id).group == .ai {
+                    paces[id] = switch usagePace(id)?.level {
+                    case .onTrack: "on track"; case .ahead: "ahead"; case .over: "over"; case nil: ""
+                    }
+                }
+            }
+            if let command = variable.command, let result = commands.results[command.normalized] { results[variable.id] = result }
+        }
+        let readings = self.readings
+        let metrics_ = metrics, paces_ = paces, results_ = results
+        @Sendable func config(_ format: ValueFormat) -> SpriteConfiguration {
+            var config = SpriteConfiguration(metricIDs: [])
+            config.showUnits = format.showUnit; config.decimals = format.decimals
+            config.fahrenheit = format.fahrenheit; config.networkBits = format.bits
+            return config
+        }
+        @Sendable func number(_ variable: SpriteVariable) -> Double? {
+            switch variable.source {
+            case .reading(let id): readings[id]?.number
+            case .command: results_[variable.id].flatMap { $0.available ? $0.number : nil }
+            case .constant(let text): Double(text)
+            }
+        }
+        return DesignValues(
+            formatted: { variable in
+                switch variable.source {
+                case .reading(let id):
+                    guard let metric = metrics_[id] else { return "—" }
+                    return MetricFormat.string(readings[id], metric: metric, config: config(variable.format), compact: true)
+                case .command:
+                    guard let result = results_[variable.id], result.available else { return "—" }
+                    if let text = result.text { return text + variable.format.suffix }
+                    let value = result.number ?? 0
+                    return String(format: "%.*f", locale: Locale(identifier: "en_US_POSIX"), variable.format.decimals, value)
+                        + variable.format.suffix
+                case .constant(let text): return text
+                }
+            },
+            number: number,
+            text: { variable in
+                switch variable.source {
+                case .reading(let id): readings[id]?.text
+                case .command: results_[variable.id].flatMap { $0.available ? $0.text : nil }
+                case .constant(let text): text
+                }
+            },
+            aspect: { variable, aspect in
+                guard aspect == .pace, let id = variable.readingID else { return nil }
+                return paces_[id]
+            },
+            widthTemplates: { variable in
+                guard let id = variable.readingID, let metric = metrics_[id] else { return [] }
+                return MetricFormat.widthTemplates(metric: metric, config: config(variable.format))
+            })
+    }
+
+    /// The design's visible text, for accessibility and one-line summaries.
+    func designText(_ design: SpriteDesign) -> String {
+        let values = designValues(design)
+        let overrides = SpriteRules.evaluate(design, values: values)
+        func walk(_ node: DesignNode) -> [String] {
+            if overrides[node.id]?.hidden ?? node.style.hidden { return [] }
+            if node.kind == .text {
+                return [(overrides[node.id]?.text ?? node.segments).map { segment in
+                    switch segment {
+                    case .literal(let text): text
+                    case .value(let id): design.variable(id).map(values.formatted) ?? "?"
+                    }
+                }.joined()]
+            }
+            if node.kind == .battery, let variable = node.variable.flatMap(design.variable) { return [values.formatted(variable)] }
+            return node.children.flatMap(walk)
+        }
+        return walk(design.root).joined(separator: " ")
+    }
+
+    /// The menu-bar drawing of `config`, with its battery glyph when it has one.
+    func renderDesign(_ config: SpriteConfiguration, design: SpriteDesign? = nil, height: CGFloat = NSStatusBar.system.thickness,
+                      reserved: [String: CGFloat] = [:], ceiling: Int? = nil) -> DesignRenderer.Output? {
+        guard let design = design ?? config.design else { return nil }
+        var glyph: BatteryGlyph?
+        if design.root.flattened.contains(where: { $0.kind == .battery }) {
+            glyph = batteryGlyph(ceiling: ceiling)
+            glyph?.percentInside = config.enabled
+        }
+        return DesignRenderer.render(design, values: designValues(design), height: height, reserved: reserved, battery: glyph)
+    }
+}
+
+extension MonitoringStore {
+    /// Off-screen renders only: readings the harness cannot sample (AI limits need the network).
+    func injectReadingsForValidation(_ values: [String: Reading]) { readings.merge(values) { _, new in new } }
 }

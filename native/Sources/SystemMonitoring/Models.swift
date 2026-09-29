@@ -182,6 +182,14 @@ public struct SpriteConfiguration: Identifiable, Codable, Sendable, Equatable {
         get { readoutLayout ?? .inline }
         set { readoutLayout = newValue }
     }
+    /// The sprite's face, values and rules, edited in the studio. Nil only for a sprite saved before
+    /// designs existed; the store converts those on load. The settings above stay in the file, so an
+    /// older build still draws the sprite as it was.
+    private var spriteDesign: SpriteDesign?
+    public var design: SpriteDesign? {
+        get { spriteDesign }
+        set { spriteDesign = newValue }
+    }
     public init(name: String = "My sprite", symbol: String = "gauge.with.dots.needle.50percent",
                 metricIDs: [String] = ["cpu.usage"], enabled: Bool = true, showInMenuBar: Bool = true) {
         id = UUID(); self.name = name; self.symbol = symbol; self.metricIDs = metricIDs
@@ -195,8 +203,16 @@ public struct SpriteConfiguration: Identifiable, Codable, Sendable, Equatable {
         name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
         if name.isEmpty { name = "My sprite" }
         var seen: Set<String> = []
-        metricIDs = Array(metricIDs.filter { seen.insert($0).inserted }.prefix(8))
-        if metricIDs.isEmpty { metricIDs = ["cpu.usage"] }
+        if var design = spriteDesign {
+            // The readings a designed sprite shows are whatever its face draws; a sprite of commands
+            // alone shows none, and that is allowed.
+            design.prune()
+            spriteDesign = design
+            metricIDs = Array(design.displayedReadingIDs.prefix(32))
+        } else {
+            metricIDs = Array(metricIDs.filter { seen.insert($0).inserted }.prefix(8))
+            if metricIDs.isEmpty { metricIDs = ["cpu.usage"] }
+        }
         readoutLabels = readoutLabels?.filter { metricIDs.contains($0.key) }
         interval = [1.0, 2, 5, 10, 30, 60].contains(interval) ? interval : 2
         fontSize = fontSize.isFinite ? min(16, max(10, fontSize)) : 12
