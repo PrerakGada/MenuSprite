@@ -377,19 +377,9 @@ struct HubToolsSection: View {
 
     var body: some View {
         HubScroll {
-            HubCard(title: "Keep awake") {
-                HStack {
-                    Text(power.awakeReason).font(.system(size: 13)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 8)
-                    Toggle("", isOn: Binding(get: { power.awake },
-                                             set: { $0 ? power.startAwake() : power.stopAwake() }))
-                        .toggleStyle(.switch).controlSize(.small).labelsHidden()
-                        .accessibilityLabel("Keep this Mac awake")
-                        .accessibilityIdentifier("hub-keep-awake")
-                }
-            }
+            HubKeepAwakeCard(power: power, openPowerControls: { close(); actions.openPowerControls() })
             HubMenuBarSpacingCard()
+            HubMenuBarIconCard()
             HubCard(title: "Sensors") {
                 HubStat(label: "Fan speed", value: monitoring.hubValue("sensor.fanSpeed"))
                 HubStat(label: "CPU temperature", value: monitoring.hubValue("sensor.cpuTemperature"))
@@ -397,17 +387,80 @@ struct HubToolsSection: View {
                 Text("Read-only SMC values. MenuSprite does not change fan control.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            HubCard(title: "Full pages") {
-                Button { close(); actions.openPowerControls() } label: {
-                    Label(BuildFeatures.powerPageTitle, systemImage: "bolt.badge.clock")
+        }
+    }
+}
+
+/// Which artwork MenuSprite's own menu-bar item wears: the default Arranger or any of the early brand
+/// explorations. A pick applies at once; the monochrome switch follows the menu bar's light or dark.
+struct HubMenuBarIconCard: View {
+    @State private var choice: MenuBarIconChoice
+    @State private var monochrome: Bool
+
+    /// The arguments exist for `--menu-bar-icon-render`, which draws states without saving them.
+    init(choice: MenuBarIconChoice = MenuBarIconChoice.saved, monochrome: Bool = MenuBarIconChoice.monochrome) {
+        _choice = State(initialValue: choice)
+        _monochrome = State(initialValue: monochrome)
+    }
+
+    var body: some View {
+        HubCard(title: "Menu bar icon") {
+            ForEach(MenuBarIconChoice.Family.allCases) { family in
+                Text(family.title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 6) {
+                    ForEach(MenuBarIconChoice.allCases.filter { $0.family == family }) { option in
+                        tile(option)
+                    }
                 }
-                .controlSize(.small)
-                Button { close(); actions.openPermissions() } label: {
-                    Label("Permissions & Access", systemImage: "lock.shield")
+            }
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Monochrome").font(.system(size: 13))
+                    Text(choice.hasMonochrome
+                         ? "Follows the menu bar, black on light and white on dark."
+                         : "\(choice.title) is a 3D render and has colour only.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .controlSize(.small).accessibilityIdentifier("hub-open-permissions")
+                Spacer(minLength: 8)
+                Toggle("", isOn: Binding(get: { monochrome }, set: { MenuBarIconChoice.monochrome = $0; monochrome = $0 }))
+                    .toggleStyle(.switch).controlSize(.small).labelsHidden()
+                    .disabled(!choice.hasMonochrome)
+                    .accessibilityLabel("Monochrome menu bar icon")
+                    .accessibilityIdentifier("hub-menubar-icon-monochrome")
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: MenuBarIconChoice.changed)) { _ in
+            choice = MenuBarIconChoice.saved
+            monochrome = MenuBarIconChoice.monochrome
+        }
+    }
+
+    private func tile(_ option: MenuBarIconChoice) -> some View {
+        let selected = option == choice
+        let template = monochrome && option.hasMonochrome
+        return Button {
+            MenuBarIconChoice.saved = option
+            choice = option
+        } label: {
+            Group {
+                if let image = option.image(monochrome: template) {
+                    Image(nsImage: image).resizable().renderingMode(template ? .template : .original)
+                        .aspectRatio(contentMode: .fit).foregroundStyle(.primary)
+                } else {
+                    Image(systemName: "questionmark.square.dashed").foregroundStyle(.secondary)
+                }
+            }
+            .frame(height: 30).frame(maxWidth: .infinity).padding(.vertical, 7).padding(.horizontal, 4)
+            .background(selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.accentColor : .clear, lineWidth: 1.5))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .help(option.title)
+        .accessibilityLabel(option.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("hub-menubar-icon-\(option.rawValue)")
     }
 }
 

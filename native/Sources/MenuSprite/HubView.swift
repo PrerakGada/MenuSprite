@@ -76,19 +76,33 @@ struct HubView: View {
         .padding(.bottom, 12)
     }
 
+    /// Every full window, always in view: the hub is the one way into MenuSprite, so nothing may
+    /// hide behind a secondary click or the bottom of a tab.
     private var footer: some View {
-        HStack(spacing: 10) {
-            Button { close(); actions.openSprites() } label: {
-                Label("Settings", systemImage: "gearshape").frame(maxWidth: .infinity)
-            }
-            .controlSize(.large).accessibilityIdentifier("hub-settings")
-            Button { NSApp.terminate(nil) } label: {
-                Label("Quit", systemImage: "power").frame(maxWidth: .infinity)
-            }
-            .controlSize(.large).accessibilityIdentifier("hub-quit")
+        HStack(spacing: 6) {
+            footerButton("Sprites", "slider.horizontal.3", "Monitoring & Sprites", id: "hub-settings", actions.openSprites)
+            footerButton(BuildFeatures.publicPreview ? "Awake" : "Controls", "bolt.badge.clock", BuildFeatures.powerPageTitle,
+                         id: "hub-open-power-controls", actions.openPowerControls)
+            footerButton("Island", "capsule.fill", "Dynamic Island settings", id: "hub-open-island", actions.openIsland)
+            footerButton("Access", "lock.shield", "Permissions & Access", id: "hub-open-permissions", actions.openPermissions)
+            footerButton("Quit", "power", "Quit MenuSprite", id: "hub-quit") { NSApp.terminate(nil) }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    private func footerButton(_ title: String, _ symbol: String, _ help: String, id: String,
+                              _ action: @escaping () -> Void) -> some View {
+        Button { if id != "hub-quit" { close() }; action() } label: {
+            VStack(spacing: 3) {
+                Image(systemName: symbol).font(.system(size: 15))
+                Text(title).font(.system(size: 11, weight: .medium)).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 7)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain).help(help).accessibilityLabel(help).accessibilityIdentifier(id)
     }
 }
 

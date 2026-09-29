@@ -11,7 +11,18 @@ final class PowerStore: ObservableObject {
     @Published var helperStatus = "Not installed"
     @Published var notice: String?
     @Published var band = ChargeBand()
-    @Published var duration: Double = 3600
+    /// The default keep-awake length in seconds, 0 = until turned off. Saved.
+    @Published var duration: Double = 0
+    @Published var awakeIcon: AwakeIcon = .menuSprite
+    @Published var awakeTint: AwakeTint = .orange
+    /// Start a default-length session whenever MenuSprite opens.
+    @Published var awakeOnLaunch = false
+    @Published var jiggle = false
+    @Published var jiggleMinutes = 5
+    /// Stop holding the Mac awake on battery below this percentage; 0 = never.
+    @Published var batteryFloor = 0
+    @Published var rightClick: AwakeRightClick = .toggle
+    @Published var awakeShortcut: IslandShortcut?
     @Published var keepDisplay = false
     @Published var acOnly = false
     @Published var pauseWhenLocked = true
@@ -60,6 +71,7 @@ final class PowerStore: ObservableObject {
     private var session = AwakeSession()
     private var externalPowerForAwake: Bool?
     private var expiry: DispatchWorkItem?
+    private var jiggleTimer: Timer?
     private var heartbeat: Timer?
     private var connection: NSXPCConnection?
     private var observers: [NSObjectProtocol] = []
@@ -143,6 +155,15 @@ final class PowerStore: ObservableObject {
             preferences.set(saverEnabled, forKey:"power.saverEnabled")
         }
         keepDisplay = preferences.bool(forKey:"power.keepDisplay")
+        duration = preferences.object(forKey:"power.duration") as? Double ?? 0
+        awakeIcon = preferences.string(forKey:"power.awakeIcon").flatMap(AwakeIcon.init(rawValue:)) ?? .menuSprite
+        awakeTint = preferences.string(forKey:"power.awakeTint").flatMap(AwakeTint.init(rawValue:)) ?? .orange
+        awakeOnLaunch = preferences.bool(forKey:"power.awakeOnLaunch")
+        jiggle = preferences.bool(forKey:"power.jiggle")
+        jiggleMinutes = preferences.object(forKey:"power.jiggleMinutes") as? Int ?? 5
+        batteryFloor = preferences.integer(forKey:"power.batteryFloor")
+        rightClick = preferences.string(forKey:"power.rightClick").flatMap(AwakeRightClick.init(rawValue:)) ?? .toggle
+        awakeShortcut = preferences.data(forKey:"power.awakeShortcut").flatMap { try? JSONDecoder().decode(IslandShortcut.self, from: $0) }
         acOnly = preferences.bool(forKey:"power.acOnly")
         pauseWhenLocked = preferences.object(forKey:"power.pauseWhenLocked") as? Bool ?? true
         // Rules are saved, but require Resume after app launch. A restart never
@@ -243,10 +264,28 @@ final class PowerStore: ObservableObject {
         preferences.set(try? JSONEncoder().encode(band),forKey:"power.chargeBand")
         for (key,value) in [("keepDisplay",keepDisplay),("acOnly",acOnly),("pauseWhenLocked",pauseWhenLocked),("autoAC",autoAC),("autoDisplay",autoDisplay)] { preferences.set(value,forKey:"power.\(key)") }
         preferences.set(appRules,forKey:"power.appRules")
+        for (key,value) in [("awakeOnLaunch",awakeOnLaunch),("jiggle",jiggle)] { preferences.set(value,forKey:"power.\(key)") }
+        preferences.set(duration,forKey:"power.duration"); preferences.set(jiggleMinutes,forKey:"power.jiggleMinutes")
+        preferences.set(batteryFloor,forKey:"power.batteryFloor")
+        preferences.set(awakeIcon.rawValue,forKey:"power.awakeIcon"); preferences.set(awakeTint.rawValue,forKey:"power.awakeTint")
+        preferences.set(rightClick.rawValue,forKey:"power.rightClick")
+        preferences.set(awakeShortcut.flatMap { try? JSONEncoder().encode($0) },forKey:"power.awakeShortcut")
         reconcileAwake()
     }
-    func startAwake() {
-        session.start(duration: duration); manualUntil = session.deadline
+    /// Called once the app is running for real (not in validation modes): the global shortcut and
+    /// the optional start-on-open session.
+    func startKeepAwakeServices() {
+        applyAwakeShortcut()
+        if awakeOnLaunch && !awake { startAwake() }
+    }
+    /// Registers the saved shortcut; false when another app already owns that combination.
+    @discardableResult func applyAwakeShortcut() -> Bool {
+        IslandShortcuts.shared.register("keepAwake", awakeShortcut) { [weak self] in self?.toggleAwake() }
+    }
+    func toggleAwake() { awake ? stopAwake() : startAwake() }
+    /// Starts a session of the given length (the saved default when nil).
+    func startAwake(for seconds: Double? = nil) {
+        session.start(duration: seconds ?? duration); manualUntil = session.deadline
         expiry?.cancel()
         if let end = manualUntil {
             let item = DispatchWorkItem { [weak self] in
@@ -298,11 +337,15 @@ final class PowerStore: ObservableObject {
         if let reason = session.pauseReason(locked: locked, pauseWhenLocked: pauseWhenLocked, acOnly: acOnly, externalPower: externalPowerForAwake) {
             releaseAssertions(); awakeReason = reason; return
         }
+        if batteryFloor > 0, snapshot.pluggedIn == false, let percent = snapshot.percent, percent < batteryFloor {
+            releaseAssertions(); awakeReason = "Paused · battery below \(batteryFloor)%"; return
+        }
         do {
             if systemAssertion == 0 { systemAssertion = try createAssertion(kIOPMAssertionTypePreventUserIdleSystemSleep, "MenuSprite — keep awake") }
             if keepDisplay && displayAssertion == 0 { displayAssertion = try createAssertion(kIOPMAssertionTypePreventUserIdleDisplaySleep,"MenuSprite — keep display awake") }
             if !keepDisplay && displayAssertion != 0 { IOPMAssertionRelease(displayAssertion); displayAssertion = 0 }
             awake = true; awakeReason = reasons.joined(separator:" · ")
+            updateJiggle()
         } catch { releaseAssertions(); notice = error.localizedDescription; awakeReason = "Keep-awake could not start" }
     }
     private func createAssertion(_ type: String, _ reason: String) throws -> IOPMAssertionID {
@@ -314,6 +357,17 @@ final class PowerStore: ObservableObject {
     private func releaseAssertions() {
         for id in assertionIDs { IOPMAssertionRelease(id) }
         systemAssertion = 0; displayAssertion = 0; awake = false
+        updateJiggle()
+    }
+    /// One repeating timer while awake with "Move pointer slightly" on; none otherwise.
+    private func updateJiggle() {
+        let interval = TimeInterval(max(1, jiggleMinutes) * 60)
+        guard awake && jiggle else { jiggleTimer?.invalidate(); jiggleTimer = nil; return }
+        if let jiggleTimer, jiggleTimer.isValid, jiggleTimer.timeInterval == interval { return }
+        jiggleTimer?.invalidate()
+        jiggleTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+            PointerNudge.nudge(ifIdleFor: min(60, interval / 2))
+        }
     }
     /// Menu-facing description of what the hardware is doing, never what was merely asked for.
     var chargeStatus: String {

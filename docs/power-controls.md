@@ -29,6 +29,19 @@ restart the session. Saved rules need Resume after relaunch. This uses owned nat
 IOPM idle-system/display assertions. Explicit Sleep and lid closure follow macOS
 rules unless the separate closed-lid mode is active.
 
+**Keep Awake options (29 Sep, Vorssaint-parity, built from its UI and saved settings only).** The hub's
+Tools card holds everything: the switch, then Options — the **active icon** the brand item swaps to while
+awake (MenuSprite's own silhouette, following the chosen menu-bar icon, or coffee / eye / moon / bulb),
+its **colour** (orange, green, blue, purple, pink, or the menu bar's own ink), the **default length**
+(15 m / 30 m / 1 h / 2 h / 4 h / 8 h / until turned off — now saved as `power.duration`; before this it
+reset to 1 h every launch), **what right-click does** (toggle, a duration menu, open the hub, nothing),
+an optional **global shortcut** (unset by default; ⌃⌥⌘K belongs to Vorssaint on Prerak's Mac),
+allow display sleep, **keep awake when MenuSprite opens**, Automation (the rules above plus a
+**battery floor** that pauses the hold on battery below 10–50%), **move pointer slightly** every
+1/2/5/10 min (skipped while the person is using the Mac; needs macOS's event-posting consent) and,
+with the helper installed, **keep going with the lid closed**. All saved under `power.*`.
+Off-screen check: `MenuSprite --keep-awake-render <dir>` draws the card and every icon × colour.
+
 **Battery** offers a charge ceiling and lower resume threshold (20–100%, lower
 strictly below upper), a one-time top-up to 100%, and discharge to the ceiling while
 plugged in. Top-up returns to the chosen band without forcing a discharge. Forced

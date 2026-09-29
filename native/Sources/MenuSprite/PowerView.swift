@@ -165,10 +165,8 @@ struct PowerView: View {
                 }
                 HStack {
                     Picker("Duration",selection:$store.duration) {
-                        Text("15 minutes").tag(900.0); Text("30 minutes").tag(1800.0)
-                        Text("1 hour").tag(3600.0); Text("2 hours").tag(7200.0)
-                        Text("8 hours").tag(28800.0); Text("Until stopped").tag(0.0)
-                    }.frame(width:240)
+                        ForEach(AwakeDurations.all, id: \.self) { Text(AwakeDurations.title($0)).tag($0) }
+                    }.frame(width:240).onChange(of:store.duration) { _,_ in store.settingsChanged() }
                     Spacer()
                     Button("Start keep-awake") { store.startAwake() }.accessibilityIdentifier("start-keep-awake")
                     Button("Stop & pause rules") { store.stopAwake() }.accessibilityIdentifier("stop-keep-awake")

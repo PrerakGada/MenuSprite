@@ -38,7 +38,8 @@ included in `site/assets/fonts/`.
 `exploration/arranger-identity-study.png` captures the accepted active pose.
 `exploration/sprite-library-concepts.png` preserves ten optional character ideas:
 Peek, Bitwing, Droplet, Mochi, Comet, Bud, Batlet, Tilekin, Orbit, and Fold.
-They are concept artwork for the future library, not implemented native assets.
+Cut-outs of them, and of the six identity treatments, are choices for MenuSprite's own
+menu-bar icon (`docs/menu-bar-icon.md`). They are not yet a sprite library for users' own items.
 
 The product name is MenuSprite. Peekaboo, Arranger, and Slim rail are design
 direction labels, not alternative product names.

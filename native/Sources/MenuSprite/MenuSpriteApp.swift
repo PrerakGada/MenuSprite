@@ -1,5 +1,6 @@
 import AIAccounts
 import AppKit
+import Combine
 import PowerControl
 import SwiftUI
 import SystemMonitoring
@@ -28,6 +29,9 @@ struct MenuSpriteMain {
         // Off-screen island page renders; exits when done and never reaches the app delegate.
         IslandRenderHarness.runIfRequested()
         EnergyRenderHarness.runIfRequested()
+        MenuBarIconRenderHarness.runIfRequested()
+        KeepAwakeRenderHarness.runIfRequested()
+        SpriteStudioRenderHarness.runIfRequested()
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -41,7 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private(set) var powerStore: PowerStore!
     private(set) var powerWindow: NSWindow?
     private var statusItem: NSStatusItem?
-    private var brandMenu: NSMenu?
+    private var awakeObserver: AnyCancellable?
+    private var iconObserver: NSObjectProtocol?
     private(set) var settingsWindow: NSWindow?
     private(set) var permissionStore: PermissionStore?
     private var activationObserver: NSObjectProtocol?
@@ -99,11 +104,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                                      openPermissions: { [weak self] in self?.showSettings() },
                                                      openPowerControls: { [weak self] in self?.showPower() },
                                                      openWork: { [weak self] in self?.showWork() },
+                                                     openIsland: { [weak self] in self?.showIslandSettings() },
                                                      editSprite: { [weak self] config in
                                                          self?.showMonitoring(); self?.monitoringStore.edit(config)
                                                      }))
         if backgroundWork {
             accounts.startAutoSwitchMonitor()
+            // Render harnesses draw and exit; they must not grab the shortcut or hold the Mac awake.
+            if !arguments.contains(where: { $0.hasPrefix("--") && $0.hasSuffix("-render") }) { powerStore.startKeepAwakeServices() }
             startIsland(accounts: accounts)
         }
         if evidenceDirectory == nil { monitoringStore.start() }
@@ -233,39 +241,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mainMenu.addItem(windowItem)
         NSApp.mainMenu = mainMenu
 
-        let icon = NSImage(named: "MenuBarIcon")
-        let iconHeight = max(18, NSStatusBar.system.thickness - 2)
-        let aspectRatio = icon.map { $0.size.width / max(1, $0.size.height) } ?? 1.5
-        let iconWidth = ceil(iconHeight * aspectRatio)
-        let item = NSStatusBar.system.statusItem(withLength: iconWidth + 6)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            icon?.size = NSSize(width: iconWidth, height: iconHeight)
-            button.image = icon
             button.imagePosition = .imageOnly
             button.imageScaling = .scaleProportionallyDown
             button.toolTip = "MenuSprite"
             button.setAccessibilityLabel("MenuSprite")
         }
-        // A left click opens the hub — every MenuSprite page in one panel. The old list of windows
-        // stays on the secondary click so nothing that worked before becomes unreachable.
-        let menu = NSMenu()
-        let title = NSMenuItem(title: "MenuSprite", action: nil, keyEquivalent: "")
-        title.isEnabled = false
-        menu.addItem(title)
-        menu.addItem(menuItem("Monitoring & Sprites…", #selector(showMonitoring), ","))
-        menu.addItem(menuItem("Battery & Power…", #selector(showEnergy), "b"))
-        menu.addItem(menuItem("AI Accounts…", #selector(showAccounts), ""))
-        menu.addItem(menuItem("Dynamic Island…", #selector(showIslandSettings), ""))
-        if !BuildFeatures.publicPreview { menu.addItem(menuItem("Work & Clients…", #selector(showWork), "t")) }
-        menu.addItem(menuItem(BuildFeatures.powerPageTitle + "…", #selector(showPower), "p"))
-        menu.addItem(menuItem("Permissions & Access…", #selector(showSettings), ""))
-        menu.addItem(.separator())
-        menu.addItem(menuItem("Quit MenuSprite", #selector(quit), "q"))
-        brandMenu = menu
+        // A left click opens the hub, which reaches every MenuSprite page and window. A right click
+        // (or ⌃-click) toggles Keep Awake; the icon wears a badge while the Mac is held awake.
         item.button?.target = self
         item.button?.action = #selector(brandItemClicked)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
+        applyMenuBarIcon()
+        iconObserver = NotificationCenter.default.addObserver(forName: MenuBarIconChoice.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyMenuBarIcon() }
+        }
+        awakeObserver = Publishers.CombineLatest3(powerStore.$awake.removeDuplicates(), powerStore.$awakeIcon.removeDuplicates(),
+                                                  powerStore.$awakeTint.removeDuplicates())
+            .dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.applyMenuBarIcon() }
+            }
+    }
+
+    /// Puts the chosen artwork on the brand item, sized to the menu bar's height at its own aspect
+    /// ratio, with the keep-awake badge while a right click is holding the Mac awake.
+    private func applyMenuBarIcon() {
+        guard let item = statusItem, let button = item.button else { return }
+        let icon = MenuBarIconChoice.currentImage() ?? MenuBarIconChoice.arranger.image(monochrome: false)
+        let iconHeight = max(18, NSStatusBar.system.thickness - 2)
+        let aspectRatio = icon.map { $0.size.width / max(1, $0.size.height) } ?? 1.5
+        let iconWidth = ceil(iconHeight * aspectRatio)
+        icon?.size = NSSize(width: iconWidth, height: iconHeight)
+        let awake = powerStore?.awake == true
+        let active = awake ? AwakeIconArt.image(icon: powerStore.awakeIcon, tint: powerStore.awakeTint,
+                                                size: NSSize(width: iconWidth, height: iconHeight)) : nil
+        button.image = active ?? icon
+        let hint = switch powerStore?.rightClick ?? .toggle {
+        case .toggle: awake ? "Right-click to allow sleep" : "Right-click to keep this Mac awake"
+        case .durations: "Right-click to choose how long to keep this Mac awake"
+        case .hub, .nothing: ""
+        }
+        button.toolTip = ([awake ? "MenuSprite · keeping this Mac awake" : "MenuSprite"] + (hint.isEmpty ? [] : [hint])).joined(separator: "\n")
+        button.setAccessibilityValue(awake ? "Keeping this Mac awake" : nil)
+        item.length = max(iconWidth, active?.size.width ?? 0) + 6
     }
 
     @objc private func brandItemClicked() {
@@ -273,11 +293,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let event = NSApp.currentEvent
         let secondary = event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true
         if secondary {
-            // NSStatusItem only pops a menu it owns; attach it for this click and take it back after.
-            item.menu = brandMenu
-            button.performClick(nil)
-            item.menu = nil
-            return
+            switch powerStore.rightClick {
+            case .toggle: powerStore.toggleAwake(); return
+            case .durations: popAwakeMenu(item: item, button: button); return
+            case .nothing: return
+            case .hub: break
+            }
         }
         if let island, island.routesAppPanel {
             hub?.close()
@@ -288,6 +309,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let anchor = window.map { $0.convertToScreen(button.convert(button.bounds, to: nil)) }
         hub?.toggle(anchor: anchor, anchorWindow: window)
     }
+
+    /// The right-click duration menu: every length, the saved default marked, and Turn off while awake.
+    private func popAwakeMenu(item: NSStatusItem, button: NSStatusBarButton) {
+        let menu = NSMenu()
+        let status = NSMenuItem(title: powerStore.awake ? "Keeping awake · \(powerStore.awakeReason)" : "Keep this Mac awake", action: nil, keyEquivalent: "")
+        status.isEnabled = false
+        menu.addItem(status)
+        for seconds in AwakeDurations.all {
+            let row = NSMenuItem(title: AwakeDurations.title(seconds), action: #selector(startAwakeFromMenu(_:)), keyEquivalent: "")
+            row.target = self
+            row.representedObject = seconds
+            if seconds == powerStore.duration { row.state = .mixed; row.toolTip = "Your default" }
+            menu.addItem(row)
+        }
+        if powerStore.awake {
+            menu.addItem(.separator())
+            menu.addItem(menuItem("Turn off", #selector(stopAwakeFromMenu), ""))
+        }
+        // NSStatusItem only pops a menu it owns; attach it for this click and take it back after.
+        item.menu = menu
+        button.performClick(nil)
+        item.menu = nil
+    }
+    @objc private func startAwakeFromMenu(_ sender: NSMenuItem) {
+        guard let seconds = sender.representedObject as? Double else { return }
+        powerStore.startAwake(for: seconds)
+    }
+    @objc private func stopAwakeFromMenu() { powerStore.stopAwake() }
 
     /// The Dynamic Island: built once, started with its saved settings (off until turned on).
     private func startIsland(accounts: AccountsStore) {
@@ -308,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                                        openPermissions: { [weak self] in self?.showSettings() },
                                                        openPowerControls: { [weak self] in self?.showPower() },
                                                        openWork: { [weak self] in self?.showWork() },
+                                                       openIsland: { [weak self] in self?.showIslandSettings() },
                                                        editSprite: { [weak self] config in self?.showMonitoring(); self?.monitoringStore.edit(config) }),
                                    close: { [weak island] in island?.close() }))
         }

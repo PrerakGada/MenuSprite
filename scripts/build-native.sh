@@ -59,6 +59,9 @@ iconutil -c icns "$build_root/AppIcon.iconset" -o "$app_path/Contents/Resources/
 sips -z 112 112 "$artwork" --out "$app_path/Contents/Resources/BrandIcon.png" >/dev/null
 # The menu bar uses the isolated sprite/rail artwork, not the opaque app-icon tile.
 sips -Z 96 "$native_root/Resources/MenuBarArtwork.png" --out "$app_path/Contents/Resources/MenuBarIcon.png" >/dev/null
+# The other menu-bar icons a person can pick (docs/menu-bar-icon.md), already cut and sized.
+rm -rf "$app_path/Contents/Resources/MenuBarIcons"
+cp -R "$native_root/Resources/MenuBarIcons" "$app_path/Contents/Resources/MenuBarIcons"
 bridge_path="$app_path/Contents/Frameworks/libNowPlayingBridge.dylib"
 if $public_preview; then
     codesign --force --options runtime --timestamp --identifier in.prerakgada.MenuSprite.now-playing --sign "$signing_identity" "$bridge_path"

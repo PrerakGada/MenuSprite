@@ -4,14 +4,14 @@
 a list of six text entries, each of which opened a *separate* window or panel. Nothing was in one
 place, and one entry — Battery & Power — did not even open the dashboard unless a power sprite
 happened to be showing in the menu bar. The hub replaces that list with a single panel under the
-icon: brand header, an icon tab rail, the selected page, and one Settings / Quit footer.
+icon: brand header, an icon tab rail, the selected page, and a footer strip that opens every full window — Sprites (Monitoring & Sprites), Power Controls, Island (Dynamic Island settings), Access (Permissions & Access) — and Quit.
 
 ## What opens it
 
 | Gesture | Result |
 | --- | --- |
 | Left click on the brand item | Opens the hub at the last page you were on; clicking again closes it |
-| Right click (or ⌃-click) on the brand item | The original menu of full windows, unchanged |
+| Right click (or ⌃-click) on the brand item | Whatever Tools › Keep awake › Right-click says: toggle Keep Awake (default), a duration menu, open the hub, or nothing. While the Mac is held awake the whole icon swaps to the chosen active icon in the chosen colour, at the item's usual width. The old menu of full windows was removed on 28 Sep: everything in it is in the hub. |
 | App menu → Battery & Power (⌘B) | The power sprite's own dashboard when one is in the menu bar, otherwise the hub's Power page |
 | ⌘W while it is showing | Closes the hub |
 
@@ -30,7 +30,7 @@ or a Space change. It never steals focus from the app you were working in.
 | AI | The AI Accounts board itself: live Claude and Codex limits, account switching, estimated spend |
 | Sprites | Every sprite with its live readout, Enabled and In-menu-bar switches, and a way into its editor |
 | Work | A way into Work & Clients, which needs a full window (local builds only) |
-| Tools | Keep-awake, the fan and temperature sensors, and the two full pages — Power Controls and Permissions & Access |
+| Tools | Keep-awake, menu-bar spacing and icon, and the fan and temperature sensors (the full windows moved to the footer) |
 
 Work & Clients, Monitoring & Sprites and Permissions & Access stay full windows: they are wider than
 a menu-bar panel can be. Everything else lives in the hub.
