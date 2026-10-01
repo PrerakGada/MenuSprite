@@ -414,7 +414,13 @@ enum AgentRender {
         case .power?: return "Battery & Power dashboard"
         case .cpu?: return "CPU process panel"
         case .memory?: return "memory panel"
-        default: return config.opensFanBoard ? "fan controls" : "readings panel"
+        default:
+            if config.opensFanBoard { return "fan controls" }
+            switch config.connectivityBoard {
+            case .wifi?: return "Wi-Fi board"
+            case .bluetooth?: return "Bluetooth board"
+            case nil: return "readings panel"
+            }
         }
     }
 
