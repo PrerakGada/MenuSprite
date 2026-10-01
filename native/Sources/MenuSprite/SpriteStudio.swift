@@ -298,28 +298,41 @@ struct SymbolPicker: View {
                          "cloud", "sun.max", "moon", "drop", "house", "cart", "creditcard", "dollarsign.circle",
                          "server.rack", "shippingbox", "cube", "hammer", "wrench.and.screwdriver", "gearshape",
                          "arrow.up", "arrow.down", "arrow.up.arrow.down", "checkmark.circle", "xmark.octagon",
-                         "exclamationmark.triangle", "circle.fill", "square.fill", "triangle.fill", "person", "music.note", "gamecontroller"]
+                         "exclamationmark.triangle", "circle.fill", "square.fill", "triangle.fill", "person", "music.note", "gamecontroller",
+                         SpriteSymbols.bluetooth, "wifi.slash", "airpodspro", "airpodsmax", "airpods", "beats.headphones", "headphones", "hifispeaker"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Any SF Symbol name, e.g. cup.and.saucer", text: $search)
                 .textFieldStyle(.roundedBorder)
-                .onSubmit { if NSImage(systemSymbolName: search, accessibilityDescription: nil) != nil { symbol = search } }
+                .onSubmit { if SpriteSymbols.exists(search) { symbol = search } }
             if !search.isEmpty {
-                let valid = NSImage(systemSymbolName: search, accessibilityDescription: nil) != nil
+                let valid = SpriteSymbols.exists(search)
                 Button { symbol = search } label: {
-                    Label(valid ? "Use “\(search)”" : "No symbol called “\(search)”", systemImage: valid ? search : "questionmark")
+                    Label { Text(valid ? "Use “\(search)”" : "No symbol called “\(search)”") } icon: { SymbolImage(name: valid ? search : "questionmark") }
                 }.disabled(!valid)
             }
             ScrollView {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(34)), count: 8), spacing: 6) {
                     ForEach(Self.common.filter { search.isEmpty || $0.localizedCaseInsensitiveContains(search) }, id: \.self) { name in
-                        Button { symbol = name } label: { Image(systemName: name).frame(width: 30, height: 28) }
+                        Button { symbol = name } label: { SymbolImage(name: name).frame(width: 30, height: 28) }
                             .buttonStyle(.borderless)
                             .background(symbol == name ? Color.accentColor.opacity(0.22) : .clear, in: RoundedRectangle(cornerRadius: 6))
                             .help(name)
                     }
                 }
             }
+        }
+    }
+}
+
+/// An SF Symbol, or one of MenuSprite's own (the Bluetooth mark), drawn the same way.
+struct SymbolImage: View {
+    let name: String
+    var body: some View {
+        if SpriteSymbols.custom.contains(name), let image = SpriteSymbols.image(name) {
+            Image(nsImage: image).renderingMode(.template).resizable().aspectRatio(contentMode: .fit).frame(height: 15)
+        } else {
+            Image(systemName: name)
         }
     }
 }

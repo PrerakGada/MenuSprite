@@ -14,6 +14,8 @@ extension MetricGroup {
         case .system: ["system.thermal", "system.uptime"]
         case .sensors: ["sensor.PSTR", "sensor.cpuTemperature", "sensor.fanSpeed"]
         case .ai: ["ai.claude.session", "ai.claude.weekly", "ai.codex.weekly"]
+        case .wifi: ["wifi.state", "wifi.signal"]
+        case .bluetooth: ["bluetooth.state", "bluetooth.audioBattery"]
         }
     }
 }

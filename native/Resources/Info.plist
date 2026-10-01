@@ -36,10 +36,12 @@
 	<string>MenuSprite watches the folder you chose for downloads so the Dynamic Island can show their progress and say when they finish. It reads only file names, sizes and dates, and nothing leaves your Mac.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>MenuSprite shows whether Bluetooth is on, which devices are connected and their batteries, and connects or disconnects them when you click. Nothing is scanned for or sent anywhere.</string>
 	<key>NSLocationUsageDescription</key>
-	<string>You chose Request Access for Location Services in MenuSprite. This foundation asks for consent only and does not request your location.</string>
+	<string>macOS shows Wi-Fi network names only to apps with Location access. MenuSprite uses it for the Wi-Fi sprite and board and never reads where you are.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>You chose Request Access for Location Services in MenuSprite. This foundation asks for when-in-use consent only and does not request your location.</string>
+	<string>macOS shows Wi-Fi network names only to apps with Location access. MenuSprite uses it for the Wi-Fi sprite and board and never reads where you are.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>MenuSprite records your microphone only during a screen recording you start, and only when “Record the microphone” is on.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

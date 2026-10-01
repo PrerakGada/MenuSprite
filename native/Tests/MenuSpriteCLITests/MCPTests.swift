@@ -369,12 +369,16 @@ private func call(_ id: Int, _ tool: String, _ arguments: JSONValue) -> JSONValu
     let descriptor = pipe.fileHandleForWriting.fileDescriptor
     let collected = Capture()
     let reader = Thread {
+        // Bytes are kept whole and decoded once at the end: a chunk can end inside a multi-byte character
+        // ("—", "…"), and decoding chunk by chunk would garble it however whole the server's lines are.
+        var bytes = Data()
         while true {
             let data = pipe.fileHandleForReading.availableData
             if data.isEmpty { break }
-            collected.console.write(String(decoding: data, as: UTF8.self))
+            bytes.append(data)
             Thread.sleep(forTimeInterval: 0.001)
         }
+        collected.console.write(String(decoding: bytes, as: UTF8.self))
     }
     reader.start()
     var lines = (1...16).map { request($0, "resources/read", .object([JSONMember("uri", "menusprite://guide")])).serialized() }

@@ -57,6 +57,8 @@ public actor SystemSampler {
             case .system: values = system()
             case .sensors: values = sensors(ids: ids)
             case .ai: values = [:]
+            case .wifi: values = ConnectivityReadings.wifi(ConnectivityReader.wifi())
+            case .bluetooth: values = ConnectivityReadings.bluetooth(ConnectivityReader.bluetooth())
             }
             result.readings.merge(values) { _, new in new }
         }

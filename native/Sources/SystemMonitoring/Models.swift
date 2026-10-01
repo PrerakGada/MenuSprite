@@ -2,12 +2,18 @@ import Foundation
 
 public enum MetricUnit: String, Codable, Sendable {
     case percent, bytes, bytesPerSecond, count, perSecond, seconds, celsius, watts, volts, amps, rpm, dollars, text
+    /// Radio signal and noise levels (Wi-Fi), always negative in practice.
+    case dBm
+    /// A negotiated link rate (Wi-Fi), which is not traffic: see the network rates for that.
+    case megabitsPerSecond
 }
 public enum MetricGroup: String, Codable, CaseIterable, Sendable {
     case cpu = "CPU", memory = "Memory", network = "Network", disk = "Disk"
     case gpu = "GPU", battery = "Battery", system = "System", sensors = "Sensors & power"
     /// Claude and Codex limits, fetched from the providers by the app, never by `SystemSampler`.
     case ai = "AI usage"
+    /// The Wi-Fi link (CoreWLAN) and Bluetooth accessories (IOBluetooth), read by `ConnectivityReader`.
+    case wifi = "Wi-Fi", bluetooth = "Bluetooth"
     public var icon: String {
         switch self {
         case .cpu: "cpu"
@@ -19,6 +25,8 @@ public enum MetricGroup: String, Codable, CaseIterable, Sendable {
         case .system: "desktopcomputer"
         case .sensors: "thermometer.medium"
         case .ai: "sparkles"
+        case .wifi: "wifi"
+        case .bluetooth: "headphones"
         }
     }
 }
@@ -293,6 +301,8 @@ public enum MetricFormat {
             if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m" }
             return "\(minutes)m"
         case .text: return n(value)
+        case .dBm: return (value < 0 ? "−" : "") + n(abs(value), 0) + (suffix ? " dBm" : "")
+        case .megabitsPerSecond: return n(value, 0) + (suffix ? " Mb/s" : "")
         }
     }
 }
@@ -336,6 +346,8 @@ extension MetricFormat {
         case .perSecond: return [room(3, 0) + (suffix ? "/s" : "")]
         case .seconds: return ["00h 00m", "0d 00h"]
         case .text: return []
+        case .dBm: return ["−00" + (suffix ? " dBm" : "")]
+        case .megabitsPerSecond: return [room(4, 0) + (suffix ? " Mb/s" : "")]
         }
     }
 }

@@ -126,7 +126,8 @@ enum SystemCardSupport {
 
     static func hubTab(for metric: Metric) -> HubTab {
         switch metric.group {
-        case .network: .network
+        case .network, .wifi: .network
+        case .bluetooth: .system
         case .disk: .disk
         case .battery: .power
         case .ai: .ai

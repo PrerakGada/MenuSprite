@@ -63,7 +63,7 @@ public enum AgentGuide {
 
     ### Face
 
-    Nodes, each an object with one kind key; a bare string is text, a list is a row: `{"row": […]}` · `{"column": […]}` (the bar fits two lines) · `{"text": "CPU {cpu}"}` · `{"icon": "flame.fill"}` · `{"bar": "cpu", "max": 100}` (a vertical level bar as tall as the menu bar: put it beside a `column`, never in one) · `{"battery": "charge"}`.
+    Nodes, each an object with one kind key; a bare string is text, a list is a row: `{"row": […]}` · `{"column": […]}` (two lines fit) · `{"text": "CPU {cpu}"}` · `{"icon": "flame.fill"}` (`"level": "v"` fills wifi's bars; also `menusprite.bluetooth`) · `{"bar": "cpu", "max": 100}` (full height: beside a `column`, never in one) · `{"battery": "charge"}`.
 
     Properties: `id`, `color`, `size` (text 12, icon 14), `weight` (`regular medium semibold bold heavy`), `opacity`, `align` (`leading center trailing`), `gap`, `justify` (`start center end spaceBetween even`), `padding`, `hidden`, `shrink`, `tabular` (default true), `max`, `chargeInside`. Colour passes to children, and a row's or column's opacity dims everything in it; size and weight do not pass. Colours: the names `red orange yellow green mint teal cyan blue indigo purple pink brown gray white black` are Apple's adaptive colours (one shade for light, one for dark); `"#RRGGBB"` is fixed; `"inherit"` (default); `"auto"` follows the bar.
 

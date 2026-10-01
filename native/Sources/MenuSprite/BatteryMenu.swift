@@ -31,6 +31,11 @@ final class SpriteContextMenu: NSObject, NSMenuDelegate {
         menu.autoenablesItems = false
         if config.isBatteryItem { addBatterySection(to: menu) }
         if config.opensFanBoard { addFanSection(to: menu) }
+        switch config.connectivityBoard {
+        case .wifi: addWiFiSection(to: menu)
+        case .bluetooth: addBluetoothSection(to: menu)
+        case nil: break
+        }
         add(menu, "Configure sprite…", #selector(configureSprite))
         add(menu, config.enabled ? "Pause readings" : "Resume readings", #selector(togglePaused))
         add(menu, SpritePlacement.shared.isLeft(config.id) ? "Move to right side" : "Move to left side", #selector(togglePlacement))
@@ -48,6 +53,48 @@ final class SpriteContextMenu: NSObject, NSMenuDelegate {
         }
         add(menu, "Hide from menu bar", #selector(hideItem))
         return menu
+    }
+
+    /// Wi-Fi on or off, and what it is joined to, straight from right-click.
+    private func addWiFiSection(to menu: NSMenu) {
+        guard let wifi = ConnectivityReader.wifi() else { add(menu, "This Mac has no Wi-Fi", nil); menu.addItem(.separator()); return }
+        switch wifi.state {
+        case .off: add(menu, "Wi-Fi is off", nil)
+        case .disconnected: add(menu, "Not connected", nil)
+        case .connected: add(menu, [wifi.network, wifi.rssi.map { "\(WiFiSignal.quality(rssi: $0)) signal" }].compactMap { $0 }.joined(separator: " · "), nil)
+        }
+        add(menu, wifi.powered ? "Turn Wi-Fi Off" : "Turn Wi-Fi On", #selector(toggleWiFi))?.representedObject = !wifi.powered
+        menu.addItem(.separator())
+    }
+    /// Bluetooth on or off and a disconnect per connected device. Without Bluetooth access there is
+    /// nothing to read, so the menu offers the board, which asks.
+    private func addBluetoothSection(to menu: NSMenu) {
+        let bluetooth = ConnectivityReader.bluetooth()
+        guard bluetooth.access == .allowed else {
+            add(menu, "Allow Bluetooth Access…", #selector(showDashboard))
+            menu.addItem(.separator()); return
+        }
+        if bluetooth.powered {
+            for device in bluetooth.connected {
+                let level = device.battery.headline.map { " · \($0)%" } ?? ""
+                add(menu, "Disconnect \(device.name)\(level)", #selector(disconnectDevice(_:)))?.representedObject = device.address
+            }
+            if bluetooth.connected.isEmpty { add(menu, "Nothing connected", nil) }
+        }
+        add(menu, bluetooth.powered ? "Turn Bluetooth Off" : "Turn Bluetooth On", #selector(toggleBluetooth))?.representedObject = !bluetooth.powered
+        menu.addItem(.separator())
+    }
+    @objc private func toggleWiFi(_ sender: NSMenuItem) {
+        let on = sender.representedObject as? Bool ?? true
+        Task.detached(priority: .userInitiated) { try? ConnectivityReader.setWiFiPower(on) }
+    }
+    @objc private func toggleBluetooth(_ sender: NSMenuItem) {
+        let on = sender.representedObject as? Bool ?? true
+        Task.detached(priority: .userInitiated) { try? ConnectivityReader.setBluetoothPower(on) }
+    }
+    @objc private func disconnectDevice(_ sender: NSMenuItem) {
+        guard let address = sender.representedObject as? String else { return }
+        Task.detached(priority: .userInitiated) { try? ConnectivityReader.setConnected(address, false) }
     }
 
     /// The fan presets straight from right-click, without opening the board.

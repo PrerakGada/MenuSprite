@@ -5,11 +5,11 @@ import SystemMonitoring
 extension SpecCompiler {
     static let nodeKinds = ["row", "column", "text", "icon", "bar", "battery"]
     static let nodeProperties = ["id", "name", "color", "size", "weight", "tabular", "opacity", "align", "gap", "justify",
-                                 "padding", "hidden", "shrink", "chargeInside", "max"]
+                                 "padding", "hidden", "shrink", "chargeInside", "max", "level"]
     static let nodeNotes = [
         "font": "Face text has no font: use size and weight (font is for board blocks).",
         "title": "Face nodes have no title; a text node is {\"text\": \"…\"}.",
-        "value": "Face text shows values as {value} inside \"text\"; a bar or battery names its value directly."
+        "value": "Face text shows values as {value} inside \"text\"; a bar or battery names its value directly, an icon names it as \"level\"."
     ]
 
     /// The menu-bar tree. Omitted, it is the sprite's icon alone; a single leaf is wrapped in a row so the
@@ -60,6 +60,8 @@ extension SpecCompiler {
         case .icon:
             if let symbol = content.string, !symbol.isEmpty { node.symbol = symbol; checkSymbol(symbol, path: contentPath) }
             else { report.error(contentPath, "“icon” takes an SF Symbol name, such as \"flame\".") }
+            // A value that fills the symbol's variable layers: wifi's bars, speaker.wave.3's waves.
+            if let level = object.raw("level") { node.variable = reference(level, path: object.path("level")) }
         case .bar, .battery:
             node.variable = reference(content, path: contentPath)
             // A level bar stands the whole height of the menu bar, so in a column it pushes the lines above
@@ -72,6 +74,9 @@ extension SpecCompiler {
         if let id = explicitID(object) { node.id = id }
         node.name = object.string("name") ?? ""
         parseNodeStyle(object, into: &node.style)
+        if kind != .icon, object.raw("level") != nil {
+            report.warning(object.path("level"), "Only an icon takes a level; a bar or battery names its value as its content.")
+        }
         object.checkKeys([key] + Self.nodeProperties, what: "a \(key) node", notes: Self.nodeNotes)
         return node
     }

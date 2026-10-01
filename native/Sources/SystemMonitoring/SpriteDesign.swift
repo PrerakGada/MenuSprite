@@ -163,7 +163,8 @@ public struct DesignNode: Codable, Sendable, Equatable, Identifiable {
     public var children: [DesignNode]
     public var segments: [TextSegment]
     public var symbol: String
-    /// The value a level bar or battery draws.
+    /// The value a level bar or battery draws, or an icon's fill: bound to a percentage, `wifi` fills
+    /// its bars and `speaker.wave.3` its waves (the symbol's variable value, reading ÷ `maximum`).
     public var variable: String?
     public var style: NodeStyle
 
@@ -205,7 +206,7 @@ public struct DesignNode: Codable, Sendable, Equatable, Identifiable {
     public var referencedVariables: [String] {
         switch kind {
         case .text: segments.compactMap(\.variableID)
-        case .bar, .battery: variable.map { [$0] } ?? []
+        case .bar, .battery, .icon: variable.map { [$0] } ?? []
         default: []
         }
     }

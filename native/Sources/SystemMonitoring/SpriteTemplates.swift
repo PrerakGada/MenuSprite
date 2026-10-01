@@ -8,11 +8,13 @@ public struct SpriteTemplate: Identifiable, Sendable {
     public enum Category: String, CaseIterable, Sendable {
         case cpu = "CPU", memory = "Memory", power = "Power", battery = "Battery", network = "Network"
         case disk = "Disk", gpu = "GPU", heat = "Heat & fans", ai = "AI usage", system = "System"
+        case wifi = "Wi-Fi", bluetooth = "Bluetooth"
         public var icon: String {
             switch self {
             case .cpu: "cpu"; case .memory: "memorychip"; case .power: "bolt"; case .battery: "battery.100percent"
             case .network: "network"; case .disk: "internaldrive"; case .gpu: "display"; case .heat: "fan"
             case .ai: "sparkles"; case .system: "desktopcomputer"
+            case .wifi: "wifi"; case .bluetooth: "headphones"
             }
         }
     }
@@ -23,9 +25,13 @@ public struct SpriteTemplate: Identifiable, Sendable {
     public let summary: String
     /// The settings the design is converted from. Its id is never used: `make` gives each sprite its own.
     let recipe: SpriteConfiguration
+    /// A design made by hand (icons bound to values, rules that swap them), used as it is instead of
+    /// converting the recipe. The recipe still carries the interval and the sprite's name and icon.
+    var design: SpriteDesign? = nil
 
     /// Every reading the template draws or compares.
     public var readingIDs: [String] {
+        if let design { return design.displayedReadingIDs + design.ruleOnlyReadingIDs }
         var ids = recipe.metricIDs
         if recipe.colorRule == .memoryPressure, !ids.contains("memory.pressure") { ids.append("memory.pressure") }
         return ids
@@ -35,7 +41,7 @@ public struct SpriteTemplate: Identifiable, Sendable {
     public func make(metric: (String) -> Metric?) -> SpriteConfiguration {
         var config = recipe
         config.id = UUID()
-        config.design = SpriteDesign.migrated(from: recipe, metric: metric)
+        config.design = design ?? SpriteDesign.migrated(from: recipe, metric: metric)
         config.templateID = id
         config.normalize()
         return config
@@ -232,5 +238,5 @@ public enum SpriteTemplates {
           layout: .inline, labels: false, symbol: "clock", showIcon: true, size: 12, interval: 60),
         t("system.lowPower", .system, "Low Power Mode", "Whether Low Power Mode is on.", ["system.lowPower"],
           layout: .inline, labels: false, symbol: "leaf", showIcon: true, size: 12, interval: 10)
-    ]
+    ] + connectivity
 }

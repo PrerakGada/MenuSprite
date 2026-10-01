@@ -97,6 +97,7 @@ struct SpecEmitter {
         if showsID { members.append(JSONMember("id", .string(node.id))) }
         if !node.name.isEmpty { members.append(JSONMember("name", .string(node.name))) }
         members += style
+        if node.kind == .icon, let level = node.variable { members.append(JSONMember("level", .string(level))) }
         let content: JSONValue
         switch node.kind {
         case .row, .column: content = .array(children)

@@ -108,7 +108,7 @@ public enum DesignRenderer {
             pieces.reduce(0) { sum, piece in sum + ([piece.0] + piece.1).map { advance($0, font) }.max()! }
         }
         var level: Double?
-        if node.kind == .bar, let variable = node.variable.flatMap(design.variable), let number = values.number(variable) {
+        if node.kind == .bar || node.kind == .icon, let variable = node.variable.flatMap(design.variable), let number = values.number(variable) {
             level = min(1, max(0, number / max(0.0001, node.style.maximum)))
         }
         let defaultSize: Double = switch node.kind { case .icon: 14; case .bar: 9; default: 12 }
@@ -228,7 +228,7 @@ public enum DesignRenderer {
             return CGSize(width: slot(item, reserved: reserved), height: inkHeight(item))
         case .icon:
             let side = min(band, CGFloat(item.size))
-            return CGSize(width: side, height: side)
+            return CGSize(width: ceil(side * SpriteSymbols.aspect(item.symbol)), height: side)
         case .battery:
             // The glyph grows a point when it carries the charge, as the status item always drew it.
             let side = min(band, style.chargeInside ? 15 : 14)
@@ -381,10 +381,11 @@ public enum DesignRenderer {
             // Drawn in monochrome and then filled with the colour where it has ink: a one-colour palette
             // would paint every layer alike, so a ".fill" symbol's inner mark (the tick in
             // checkmark.circle.fill) would vanish into a solid disc instead of staying cut out.
-            guard let symbol = (NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
-                ?? NSImage(systemSymbolName: "questionmark.square.dashed", accessibilityDescription: nil))?
-                .withSymbolConfiguration(.preferringMonochrome()),
+            // MenuSprite's own symbols are plain images, which take no symbol configuration.
+            guard let base = SpriteSymbols.image(item.symbol, level: item.level)
+                    ?? NSImage(systemSymbolName: "questionmark.square.dashed", accessibilityDescription: nil),
                   let context = NSGraphicsContext.current?.cgContext else { return }
+            let symbol = base.withSymbolConfiguration(.preferringMonochrome()) ?? base
             let scale = min(rect.width / max(1, symbol.size.width), rect.height / max(1, symbol.size.height))
             let size = CGSize(width: symbol.size.width * scale, height: symbol.size.height * scale)
             let target = CGRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height)

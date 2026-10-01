@@ -421,6 +421,21 @@ struct NodeInspector: View {
             StudioSection(title: "Symbol") {
                 SymbolPicker(symbol: model.node(node.id, \.symbol, fallback: "star")).frame(height: 190)
             }
+            StudioSection(title: "Fills with") {
+                // A percentage fills the symbol's variable layers: wifi's bars, speaker.wave.3's waves.
+                Picker("Value", selection: model.node(node.id, \.variable, fallback: nil)) {
+                    Text("Nothing (drawn whole)").tag(String?.none)
+                    ForEach(model.design.variables) { Text($0.name).tag(String?.some($0.id)) }
+                }.labelsHidden()
+                if node.variable != nil {
+                    InspectorField("Full at") {
+                        TextField("100", value: model.node(node.id, \.style.maximum, fallback: 100, coalesce: true), format: .number)
+                            .frame(width: 70)
+                    }
+                    Text("Symbols with layers (wifi, speaker.wave.3, cellularbars) fill as many as the value earns.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         case .bar, .battery:
             StudioSection(title: node.kind == .bar ? "Fills with" : "Charge from") {
                 Picker("Value", selection: model.node(node.id, \.variable, fallback: nil)) {

@@ -232,7 +232,7 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
             let glyph = store.batteryGlyph(ceiling: power.activeCeiling)
             button.toolTip = "\(glyph.summary) · \(power.limitStatus)\nClick for Battery & Power · right-click toggles Low Power Mode · control-click for charge controls"
         } else {
-            button.toolTip = "\(config.name) — \(config.opensAccountsBoard ? "click for AI accounts" : "click for readings")"
+            button.toolTip = "\(config.name) — \(config.boardHint)"
         }
         button.setAccessibilityLabel("\(config.name): \(output.accessibilityText)")
     }
@@ -300,6 +300,22 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
             board.behavior = .transient
             board.delegate = self
             let host = NSHostingController(rootView: FanBoard(store: store, power: power, id: config.id, configure: configure))
+            host.sizingOptions = [.preferredContentSize]
+            board.contentViewController = host
+            popover = board
+            store.openBoard(config.id)
+            board.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            if item == nil { installDismissal() }
+            return
+        }
+        if let kind = config.connectivityBoard {
+            let board = NSPopover()
+            board.behavior = .transient
+            board.delegate = self
+            let content = kind == .wifi
+                ? AnyView(WiFiBoard(store: store, id: config.id, configure: configure))
+                : AnyView(BluetoothBoard(store: store, id: config.id, configure: configure))
+            let host = NSHostingController(rootView: content)
             host.sizingOptions = [.preferredContentSize]
             board.contentViewController = host
             popover = board

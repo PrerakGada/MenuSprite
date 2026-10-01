@@ -201,3 +201,22 @@ private func roundTrips(_ text: String, file: String = #fileID, line: Int = #lin
     #expect(result.diagnostics.map(\.path) == ["[3]"] && result.diagnostics[0].severity == .error, "\(result.diagnostics)")
     #expect(blocks.count == 5 && blocks[3].action == nil)
 }
+
+@Test func iconLevelBindsAValueAndRoundTrips() throws {
+    let (config, spec, diagnostics) = try roundTrips(#"""
+    {"menusprite": 1, "name": "Wi-Fi", "face": [{"icon": "wifi", "level": "signal", "id": "bars"}, {"icon": "menusprite.bluetooth"}],
+     "values": [{"id": "signal", "reading": "wifi.signal"}]}
+    """#)
+    #expect(diagnostics.isEmpty, "\(diagnostics)")
+    let design = try #require(config.design)
+    #expect(design.root.children[0].variable == "signal")
+    #expect(design.displayedReadingIDs == ["wifi.signal"])
+    #expect(spec["face"]?[0]?["level"] == "signal")
+}
+
+@Test func levelOnANonIconIsFlagged() throws {
+    let (_, diagnostics) = try compile(#"""
+    {"menusprite": 1, "name": "X", "face": [{"text": "{signal}", "level": "signal"}], "values": [{"id": "signal", "reading": "wifi.signal"}]}
+    """#)
+    #expect(diagnostics.contains { $0.message.contains("Only an icon takes a level") })
+}

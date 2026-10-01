@@ -23,7 +23,8 @@ private func metric(_ id: String) -> Metric? { MonitoringCatalog.base.first { $0
         let config = template.make(metric: metric)
         let design = try #require(config.design, "\(template.id) has no design")
         #expect(config.templateID == template.id)
-        #expect(!design.displayedReadingIDs.isEmpty, "\(template.id) draws no reading")
+        // A status icon (Bluetooth's mark and dot) shows its readings only through rules.
+        #expect(!(design.displayedReadingIDs + design.ruleOnlyReadingIDs).isEmpty, "\(template.id) uses no reading")
         #expect(config.enabled && config.showInMenuBar)
         // Rules only ever point at nodes that exist.
         let nodes = Set(design.root.flattened.map(\.id))

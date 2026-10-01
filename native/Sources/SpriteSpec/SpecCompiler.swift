@@ -407,7 +407,8 @@ final class SpecCompiler {
 
     func checkSymbol(_ name: String, path: String) {
         guard mode == .spec, !environment.symbolExists(name) else { return }
-        report.warning(path, "This Mac has no SF Symbol called “\(name)”, so nothing is drawn.", hint: "the SF Symbols app lists names, e.g. bolt.fill")
+        report.warning(path, "This Mac has no SF Symbol called “\(name)”, so nothing is drawn.",
+                       hint: "the SF Symbols app lists names, e.g. bolt.fill; MenuSprite adds \(SpriteSymbols.custom.joined(separator: ", "))")
     }
 
     func color(_ raw: JSONValue, path: String, keywords: [String]) -> String? {

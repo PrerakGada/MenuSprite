@@ -116,7 +116,8 @@ public enum SpecSchema {
             "hidden": {"type": "boolean", "default": false},
             "shrink": {"type": "boolean", "default": false, "description": "Text gives up size before it widens."},
             "chargeInside": {"type": "boolean", "default": true, "description": "Battery: draw the charge inside the glyph."},
-            "max": {"type": "number", "exclusiveMinimum": 0, "default": 100, "description": "Level bar: the value that fills it."}
+            "max": {"type": "number", "exclusiveMinimum": 0, "default": 100, "description": "Level bar: the value that fills it."},
+            "level": {"type": "string", "description": "Icon: a value id whose 0–max reading fills the symbol's layers (wifi's bars)."}
           }
         },
         "node": {

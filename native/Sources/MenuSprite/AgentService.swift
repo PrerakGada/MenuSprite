@@ -427,7 +427,7 @@ final class AgentService {
         let ids = store.catalog.map(\.id)
         let root = host.spritesRoot
         return SpecEnvironment(metric: { catalog[$0] }, readingIDs: { ids },
-                               symbolExists: { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil },
+                               symbolExists: { SpriteSymbols.exists($0) },
                                spriteDirectory: { override ?? SpriteFolders.directory(for: $0, root: root).path },
                                hasFiles: { id in overrideFiles ?? SpriteFolders.hasFiles(in: SpriteFolders.directory(for: id, root: root)) })
     }
