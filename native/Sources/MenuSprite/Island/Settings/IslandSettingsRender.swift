@@ -74,7 +74,7 @@ enum IslandSettingsRender {
                 let model = IslandSettingsModel(environment: environment, tab: shot.tab)
                 model.selection = shot.section
                 shot.prepare(model, settings, island)
-                let view = IslandSettingsWindowController.rootView(model: model, environment: environment, island: island)
+                let view = IslandSettingsPage.rootView(model: model, environment: environment, island: island)
                 let url = directory.appendingPathComponent("settings-\(shot.name).png")
                 await capture(view, size: shot.size, appearance: shot.appearance, wait: shot.wait, to: url)
                 model.windowVisible = false

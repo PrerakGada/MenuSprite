@@ -16,6 +16,10 @@ final class MonitoringStore: ObservableObject {
     @Published var notice: String?
     @Published var editingSprite: SpriteConfiguration?
     @Published var isShowingEditor = false
+    /// The last sprite an agent saved through the socket, so an open studio holding an older copy can
+    /// reload it instead of saving that copy over the agent's change on its next edit.
+    @Published private(set) var lastAgentChange: AgentChange?
+    struct AgentChange: Equatable { let id: UUID; let revision: Int }
     private(set) var libraryOpen = false
     private(set) var suspended = false
     private var visibleCounts: [String: Int] = [:]
@@ -26,6 +30,10 @@ final class MonitoringStore: ObservableObject {
     private var hubMetrics: Set<String> = []
     private var hubInterval: Double = 2
     private var surfaceMetrics: [String: (ids: Set<String>, interval: Double)] = [:]
+    /// What agents' previews need while they draw, by request: readings sampled every second and commands
+    /// kept running, so nothing a render waits for is pruned before the picture is taken. Each render
+    /// withdraws its own entry when it finishes; empty at rest.
+    private var agentDemand: [UUID: (metrics: Set<String>, commands: Set<CommandSource>)] = [:]
     private(set) var energyHistoryBreaks: [String: [Date]] = [:]
     private let sampler = SystemSampler()
     private let usage: any UsageFetching
@@ -115,6 +123,15 @@ final class MonitoringStore: ObservableObject {
         if current != nil || !ids.isEmpty { schedule() }
     }
     func closeBoard(_ id: UUID) { boards.remove(id); schedule() }
+    /// Whether a sprite's board is open in the menu bar right now.
+    func isBoardOpen(_ id: UUID) -> Bool { boards.contains(id) }
+    /// An agent's render registers what it draws under its own token; empty sets withdraw it. Scheduled at
+    /// once, so the first sample and the first command runs start without the usual debounce.
+    func setAgentDemand(_ owner: UUID, metrics: Set<String>, commands: Set<CommandSource>) {
+        let had = agentDemand[owner] != nil
+        agentDemand[owner] = metrics.isEmpty && commands.isEmpty ? nil : (metrics, Set(commands.map(\.normalized)))
+        if had || agentDemand[owner] != nil { schedule(immediate: true) }
+    }
     func suspend() {
         suspended = true; generation += 1; task?.cancel(); task = nil; aiTask?.cancel(); aiTask = nil; isSampling = false
         Task { await sampler.resetBaselines() }
@@ -198,13 +215,37 @@ final class MonitoringStore: ObservableObject {
         isShowingEditor = true
     }
     func edit(_ config: SpriteConfiguration) { editingSprite = config; isShowingEditor = true }
-    func save(_ value: SpriteConfiguration) {
+
+    // MARK: Gallery
+
+    /// Saved sprites made from `templateID`.
+    func sprites(from templateID: String) -> [SpriteConfiguration] { sprites.filter { $0.templateID == templateID } }
+    /// Adds a sprite made from `template` to the end of the menu bar and returns it.
+    @discardableResult
+    func add(_ template: SpriteTemplate) -> SpriteConfiguration {
+        let config = template.make(metric: knownMetric)
+        save(config)
+        return config
+    }
+    /// Adds every template in `set` that is not already in the menu bar; returns how many were added.
+    @discardableResult
+    func add(_ set: SpriteTemplateSet) -> Int {
+        let missing = set.templateIDs.filter { sprites(from: $0).isEmpty }.compactMap(SpriteTemplates.template)
+        for template in missing { add(template) }
+        notice = missing.isEmpty ? "Every sprite in \(set.name) is already in your menu bar."
+            : "Added \(missing.count) sprite\(missing.count == 1 ? "" : "s") from \(set.name)."
+        return missing.count
+    }
+    /// Saves `value` and returns it as stored (normalized, design pruned).
+    @discardableResult
+    func save(_ value: SpriteConfiguration) -> SpriteConfiguration {
         var config = value
         if Self.migratesDesignsOnLoad, config.design == nil { config.design = SpriteDesign.migrated(from: config, metric: knownMetric) }
         config.normalize()
         if let index = sprites.firstIndex(where: { $0.id == config.id }) { sprites[index] = config }
         else { sprites.append(config) }
         persist(); changed?(); schedule()
+        return config
     }
     func setEnabled(_ id: UUID, _ value: Bool) {
         guard let index = sprites.firstIndex(where: { $0.id == id }) else { return }
@@ -228,6 +269,15 @@ final class MonitoringStore: ObservableObject {
     }
     var canUndoRemove: Bool { removedSprite != nil }
     func undoRemove() { if let value = removedSprite { removedSprite = nil; save(value); notice = nil } }
+    /// Puts these sprites in this order within the places they already hold; every other sprite keeps
+    /// its place. The left strip's drag uses it, so the list shows the strip's order.
+    func reorder(_ ids: [UUID]) {
+        let slots = sprites.indices.filter { ids.contains(sprites[$0].id) }
+        let byID = Dictionary(sprites.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        guard slots.count == ids.count, Set(ids).count == ids.count else { return }
+        for (slot, id) in zip(slots, ids) { if let sprite = byID[id] { sprites[slot] = sprite } }
+        persist(); changed?()
+    }
     func move(_ id: UUID, offset: Int) {
         guard let index = sprites.firstIndex(where: { $0.id == id }), sprites.indices.contains(index + offset) else { return }
         sprites.swapAt(index, index + offset); persist(); changed?()
@@ -333,6 +383,10 @@ final class MonitoringStore: ObservableObject {
         for entry in surfaceMetrics.values {
             for id in entry.ids { result[id] = min(result[id] ?? 60, entry.interval) }
         }
+        // A render waits for two samples; at one a second that is about two seconds.
+        for entry in agentDemand.values {
+            for id in entry.metrics { result[id] = min(result[id] ?? 60, 1) }
+        }
         for id in boards {
             guard let config = sprites.first(where: { $0.id == id }), config.enabled else { continue }
             var ids = config.processPanelKind?.metricIDs ?? config.metricIDs
@@ -363,7 +417,8 @@ final class MonitoringStore: ObservableObject {
         task?.cancel(); task = nil
         aiTask?.cancel(); aiTask = nil
         let requested = demand()
-        commands.setDemand(suspended ? [] : commandDemand())
+        let wantedCommands = suspended ? (all: [], previews: []) : commandDemandParts()
+        commands.setDemand(wantedCommands.all, previews: wantedCommands.previews)
         guard !requested.isEmpty, !suspended else {
             isSampling = false; aiForcePending = false
             Task { await sampler.idle() }
@@ -452,7 +507,7 @@ final class MonitoringStore: ObservableObject {
                 guard let self, currentGeneration == self.generation else { return }
                 let force = self.aiForcePending
                 self.aiForcePending = false
-                if force { self.aiLastForced = Date() }
+                if force { self.aiLastForced = Date(); await usage.restartAutoPacing() }
                 self.aiLastCheck = Date()
                 self.aiCheckedIDs = ids
                 let results = await withTaskGroup(of: (AIProvider, Result<UsageSnapshot, UsageError>).self) { group in
@@ -557,20 +612,92 @@ extension MonitoringStore {
     /// A catalog entry, or nil for a reading this Mac has not reported (the migration then keeps the id).
     func knownMetric(_ id: String) -> Metric? { catalog.first { $0.id == id } }
 
-    /// Every command a running sprite or the studio's draft needs.
-    func commandDemand() -> Set<CommandSource> {
-        var result = Set(sprites.filter(\.enabled).flatMap { $0.design?.commandVariables.compactMap(\.command) ?? [] })
+    /// Every command a running sprite, an open board, the studio's draft or an agent's render needs.
+    ///
+    /// An enabled sprite's command value runs all the time only when its face or a rule reads it, or it is
+    /// marked `background`; a value only the board shows runs while that board is open, as script rows and
+    /// script blocks always have. A sprite of board-only values therefore costs nothing until it is clicked.
+    func commandDemand() -> Set<CommandSource> { commandDemandParts().all }
+
+    /// The same, and which of those only an agent's render wants: their first run is a `preview`.
+    private func commandDemandParts() -> (all: Set<CommandSource>, previews: Set<CommandSource>) {
+        var result = Set(sprites.filter(\.enabled).flatMap { $0.design.map(Self.continuousCommands) ?? [] })
         if let previewDesign {
             result.formUnion(previewDesign.commandVariables.compactMap(\.command))
             result.formUnion(previewDesign.boardScriptCommands)
         }
-        // Script rows run only while their board is open.
-        for id in boards { if let config = sprites.first(where: { $0.id == id }), config.enabled { result.formUnion(config.design?.boardScriptCommands ?? []) } }
-        return result
+        for id in boards {
+            guard let config = sprites.first(where: { $0.id == id }), config.enabled, let design = config.design else { continue }
+            result.formUnion(design.commandVariables.compactMap(\.command))
+            result.formUnion(design.boardScriptCommands)
+        }
+        let agents = agentDemand.values.reduce(into: Set<CommandSource>()) { $0.formUnion($1.commands) }
+        return (result.union(agents), agents.subtracting(result.map(\.normalized)))
+    }
+
+    /// The command values a sprite needs while its board is closed: those its face or its rules read
+    /// (a rule may restyle the face at any moment), and those marked `background` (a chart's history).
+    static func continuousCommands(_ design: SpriteDesign) -> [CommandSource] {
+        let used = Set(design.root.flattened.flatMap(\.referencedVariables) + design.rules.flatMap(\.referencedVariables))
+        return design.commandVariables.compactMap { variable in
+            guard let command = variable.command, used.contains(variable.id) || command.background else { return nil }
+            return command
+        }
+    }
+
+    // MARK: Agents
+
+    enum SpriteMatch {
+        case one(SpriteConfiguration)
+        case several([SpriteConfiguration])
+        case noMatch
+    }
+
+    /// The sprite an agent means: an exact id, then a name (case-insensitive), then an id prefix of at least
+    /// four characters. A name is tried before a prefix so a sprite called "beef" is not lost to an id.
+    func sprite(matching reference: String) -> SpriteMatch {
+        let wanted = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return .noMatch }
+        if let id = UUID(uuidString: wanted), let found = sprites.first(where: { $0.id == id }) { return .one(found) }
+        let named = sprites.filter { $0.name.compare(wanted, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
+        if named.count == 1 { return .one(named[0]) }
+        if named.count > 1 { return .several(named) }
+        guard wanted.count >= 4 else { return .noMatch }
+        let prefix = wanted.lowercased()
+        let prefixed = sprites.filter { $0.id.uuidString.lowercased().hasPrefix(prefix) }
+        switch prefixed.count {
+        case 0: return .noMatch
+        case 1: return .one(prefixed[0])
+        default: return .several(prefixed)
+        }
+    }
+
+    /// Lets an agent's change land in an open studio: a studio holding this sprite would otherwise save its
+    /// own older copy over it on the next edit. Observers reload from `sprites`.
+    func agentSaved(_ config: SpriteConfiguration) { agentChanged(config.id) }
+    /// The same after an agent switched, hid or removed a sprite: an open studio adopts the stored copy, or
+    /// closes without saving when the sprite is gone, so it never writes back what the agent changed.
+    func agentChanged(_ id: UUID) {
+        if editingSprite?.id == id { editingSprite = sprites.first { $0.id == id } }
+        lastAgentChange = AgentChange(id: id, revision: (lastAgentChange?.revision ?? 0) + 1)
+    }
+
+    /// Runs every command a design draws from again now (its values, board-only ones included, script rows and
+    /// script blocks), side by side, one process per shared command, and returns when all have finished: after a
+    /// board action changed something, a Refresh button, or `menusprite refresh`. Commands see
+    /// `MENUSPRITE_TRIGGER=refresh` (or `trigger`). A run already going is waited for and followed by one more, so
+    /// the values see what was just changed; two commands never overlap themselves.
+    func rerun(_ design: SpriteDesign, trigger: CommandTrigger = .refresh) async {
+        await commands.run(design.commandVariables.compactMap(\.command) + design.boardScriptCommands, trigger: trigger)
     }
 
     /// The live values a design draws from, captured now.
-    func designValues(_ design: SpriteDesign) -> DesignValues {
+    ///
+    /// `overrides` (an agent's preview only) are stand-ins by value id: what the reading or command would have
+    /// produced, formatted, compared and drawn exactly as the live value would be (a reading's unit, a command's
+    /// decimals and suffix, `clock`). A `pace` (also accepted under "id.pace") replaces a limit's pace alone.
+    /// Empty overrides draw the live values.
+    func designValues(_ design: SpriteDesign, overrides: [String: ValueOverride] = [:]) -> DesignValues {
         var metrics: [String: Metric] = [:]
         var paces: [String: String] = [:]
         var results: [String: CommandResult] = [:]
@@ -583,10 +710,40 @@ extension MonitoringStore {
                     }
                 }
             }
-            if let command = variable.command, let result = commands.results[command.normalized] { results[variable.id] = result }
+            if let command = variable.command, let result = commands.result(for: command) { results[variable.id] = result }
         }
-        let readings = self.readings
-        let metrics_ = metrics, paces_ = paces, results_ = results
+        var standIns: [String: Reading] = [:], standInNumbers: [String: Double] = [:], pacedIDs: [String: String] = [:]
+        for (key, override) in overrides {
+            if key.hasSuffix(".pace"), let pace = override.pace ?? override.text { pacedIDs[String(key.dropLast(5))] = pace; continue }
+            if let pace = override.pace { pacedIDs[key] = pace }
+            guard override.text != nil || override.number != nil || override.missing, let variable = design.variable(key) else { continue }
+            if override.missing {
+                switch variable.source {
+                case .reading: standIns[key] = Reading(unavailable: "Stood in as missing")
+                case .command: results[key] = CommandResult(output: "", errorOutput: "", status: 1, problem: "Stood in as missing",
+                                                            elapsed: 0, finishedAt: Date())
+                case .constant: break
+                }
+                continue
+            }
+            let number = override.number ?? override.text.flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            switch variable.source {
+            case .reading:
+                standIns[key] = override.text.map { Reading(text: $0) } ?? Reading(number ?? 0)
+                if let number { standInNumbers[key] = number }
+            case .command:
+                results[key] = CommandResult(text: override.text, number: number, output: override.text ?? number.map { $0 == $0.rounded() && abs($0) < 1e15 ? String(Int($0)) : String($0) } ?? "",
+                                             errorOutput: "", status: 0, elapsed: 0, finishedAt: Date())
+            case .constant:
+                standIns[key] = override.text.map { Reading(text: $0) } ?? Reading(number ?? 0)
+                if let number { standInNumbers[key] = number }
+            }
+        }
+        let live = self.readings
+        let metrics_ = metrics, paces_ = paces, results_ = results, standIns_ = standIns, standInNumbers_ = standInNumbers, paced = pacedIDs
+        @Sendable func reading(_ variable: SpriteVariable) -> Reading? {
+            standIns_[variable.id] ?? variable.readingID.flatMap { live[$0] }
+        }
         @Sendable func config(_ format: ValueFormat) -> SpriteConfiguration {
             var config = SpriteConfiguration(metricIDs: [])
             config.showUnits = format.showUnit; config.decimals = format.decimals
@@ -594,41 +751,57 @@ extension MonitoringStore {
             return config
         }
         @Sendable func number(_ variable: SpriteVariable) -> Double? {
+            if standIns_[variable.id] != nil { return standInNumbers_[variable.id] }
             switch variable.source {
-            case .reading(let id): readings[id]?.number
-            case .command: results_[variable.id].flatMap { $0.available ? $0.number : nil }
-            case .constant(let text): Double(text)
+            case .reading(let id): return live[id]?.number
+            case .command: return results_[variable.id].flatMap { $0.available ? $0.number : nil }
+            case .constant(let text): return Double(text)
             }
+        }
+        @Sendable func digits(_ value: Double, _ format: ValueFormat) -> String {
+            String(format: "%.*f", locale: Locale(identifier: "en_US_POSIX"), format.decimals, value)
         }
         return DesignValues(
             formatted: { variable in
                 switch variable.source {
                 case .reading(let id):
                     guard let metric = metrics_[id] else { return "—" }
-                    return MetricFormat.string(readings[id], metric: metric, config: config(variable.format), compact: true)
+                    let value = reading(variable)
+                    // A duration read as the moment it runs out: when a limit resets, when the battery empties.
+                    if variable.format.clock, metric.unit == .seconds, let value, value.text == nil, let seconds = value.number {
+                        return ValueFormat.clockTime(value.measuredAt.addingTimeInterval(seconds))
+                    }
+                    return MetricFormat.string(value, metric: metric, config: config(variable.format), compact: true)
                 case .command:
                     guard let result = results_[variable.id], result.available else { return "—" }
+                    // A command's number of seconds counts from when it finished.
+                    if variable.format.clock, let seconds = result.number {
+                        return ValueFormat.clockTime(result.finishedAt.addingTimeInterval(seconds)) + variable.format.suffix
+                    }
                     if let text = result.text { return text + variable.format.suffix }
-                    let value = result.number ?? 0
-                    return String(format: "%.*f", locale: Locale(identifier: "en_US_POSIX"), variable.format.decimals, value)
-                        + variable.format.suffix
-                case .constant(let text): return text
+                    return digits(result.number ?? 0, variable.format) + variable.format.suffix
+                case .constant(let text):
+                    guard let standIn = standIns_[variable.id] else { return text }
+                    return standIn.text ?? standIn.number.map { digits($0, variable.format) } ?? text
                 }
             },
             number: number,
             text: { variable in
                 switch variable.source {
-                case .reading(let id): readings[id]?.text
+                case .reading: reading(variable)?.text
                 case .command: results_[variable.id].flatMap { $0.available ? $0.text : nil }
-                case .constant(let text): text
+                case .constant(let text): standIns_[variable.id].map(\.text) ?? text
                 }
             },
             aspect: { variable, aspect in
-                guard aspect == .pace, let id = variable.readingID else { return nil }
+                guard aspect == .pace else { return nil }
+                if let pace = paced[variable.id] { return pace }
+                guard let id = variable.readingID else { return nil }
                 return paces_[id]
             },
             widthTemplates: { variable in
-                guard let id = variable.readingID, let metric = metrics_[id] else { return [] }
+                // A clock time's width cannot be predicted (weekday and month names vary), and it changes rarely.
+                guard let id = variable.readingID, let metric = metrics_[id], !(variable.format.clock && metric.unit == .seconds) else { return [] }
                 return MetricFormat.widthTemplates(metric: metric, config: config(variable.format))
             })
     }

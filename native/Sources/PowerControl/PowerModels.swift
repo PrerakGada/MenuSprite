@@ -1,10 +1,18 @@
 import Foundation
 
 public enum PowerIdentity {
-    public static let service = "in.prerakgada.MenuSprite.PowerHelper"
+    /// The launchd label and Mach service of the bundled helper. Deliberately not the Terminal-installed
+    /// helper's label: macOS keeps a record for a removed legacy daemon under its label, and an SMAppService
+    /// daemon registered under the same label inherits that record, disabled, and is refused (1 Oct 2026).
+    public static let service = "in.prerakgada.MenuSprite.PowerDaemon"
     public static let appRequirement = "anchor apple generic and identifier \"in.prerakgada.MenuSprite\" and certificate leaf[subject.OU] = \"RC63N3VU27\""
     public static let helperRequirement = "anchor apple generic and identifier \"in.prerakgada.MenuSprite.PowerHelper\" and certificate leaf[subject.OU] = \"RC63N3VU27\""
-    public static let helperPath = "/Library/PrivilegedHelperTools/\(service)"
+    /// The launchd plist inside the app bundle (Contents/Library/LaunchDaemons) that SMAppService registers.
+    public static let daemonPlistName = "\(service).plist"
+    /// Where the first developer builds installed the helper from Terminal. Only migration reads these now.
+    public static let legacyLabel = "in.prerakgada.MenuSprite.PowerHelper"
+    public static let legacyHelperPath = "/Library/PrivilegedHelperTools/\(legacyLabel)"
+    public static let legacyDaemonPlist = "/Library/LaunchDaemons/\(legacyLabel).plist"
     public static let journalPath = "/Library/Application Support/MenuSprite/PowerRecovery.json"
 }
 @objc public protocol PowerHelperProtocol {
@@ -33,7 +41,7 @@ public enum BatteryPolicy {
     }
 }
 public struct PowerRequest: Codable, Sendable {
-    public enum Action: String, Codable, Sendable { case status, battery, stopBattery, startLid, stopLid, heartbeat, stopAll, chargeLimit, lowPower }
+    public enum Action: String, Codable, Sendable { case status, battery, stopBattery, startLid, stopLid, heartbeat, stopAll, chargeLimit, lowPower, fans }
     public var action: Action
     public var mode: BatteryMode
     public var band: ChargeBand
@@ -45,10 +53,12 @@ public struct PowerRequest: Codable, Sendable {
     public var led: Bool?
     /// `lowPower` only: turn macOS's Low Power Mode on or back to the normal (automatic) mode.
     public var lowPower: Bool?
+    /// Carried on every request like `led`: the fan speed the app wants held. Nil leaves the fans alone.
+    public var fans: FanTarget?
     public init(_ action: Action, mode: BatteryMode = .off, band: ChargeBand = .init(), duration: TimeInterval = 3600,
-                limit: Int? = nil, led: Bool? = nil, lowPower: Bool? = nil) {
+                limit: Int? = nil, led: Bool? = nil, lowPower: Bool? = nil, fans: FanTarget? = nil) {
         self.action = action; self.mode = mode; self.band = band; self.duration = duration
-        self.limit = limit; self.led = led; self.lowPower = lowPower
+        self.limit = limit; self.led = led; self.lowPower = lowPower; self.fans = fans
     }
 }
 public struct PowerSnapshot: Codable, Sendable {
@@ -75,6 +85,9 @@ public struct PowerSnapshot: Codable, Sendable {
     /// Optional so an app talking to an older helper still decodes its replies.
     public var ledControl: Bool?
     public var led: MagSafeLED?
+    /// What the helper is holding the fans at. Nil means a helper older than fan control.
+    public var fanTarget: FanTarget?
+    public var fans: [FanState]?
     public var controlCeiling: Int? { mode == .off ? nil : (mode == .topUp ? 100 : band.upper) }
     public init() {}
 }

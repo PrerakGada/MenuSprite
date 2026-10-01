@@ -1,5 +1,13 @@
+import AgentProtocol
+import AppKit
 import SwiftUI
 import SystemMonitoring
+import UniformTypeIdentifiers
+
+extension BoardAction {
+    /// A timeout as saved: the default (30 s) is saved as none, so a spec read back leaves it out.
+    static func stored(timeout seconds: Double) -> Double? { seconds == defaultTimeout ? nil : seconds }
+}
 
 extension StudioModel {
     var board: BoardDesign? { design.board }
@@ -52,6 +60,24 @@ extension StudioModel {
             echo "Uptime: $(uptime | sed 's/.*up \\([^,]*\\),.*/\\1/') | font=Menlo"
             echo "Open Activity Monitor | bash='open -a \\"Activity Monitor\\"' sfimage=arrow.up.forward.app"
             """, interval: 30)
+        case .blocks:
+            // Real data, so the first thing seen is a working example to change rather than a blank.
+            block.command = CommandSource(command: """
+            used=$(df -P / | awk 'NR==2 {sub("%", "", $5); print $5}')
+            cat <<JSON
+            {"blocks": [
+              {"card": [
+                {"text": "Printed by a script", "font": "headline"},
+                {"gauge": ${used:-0}, "caption": "Startup disk", "detail": "${used:-0}% used"}
+              ], "title": "Script blocks"}
+            ]}
+            JSON
+            """, interval: 60)
+        case .image: block.style.height = 120
+        case .toggle:
+            block.segments = [.literal("Example switch")]; block.symbol = "power"; block.variable = first
+            block.action = BoardAction(kind: .runCommand, value: "echo 'Turned on'")
+            block.offAction = BoardAction(kind: .runCommand, value: "echo 'Turned off'")
         case .processes: block.style.limit = 8; block.style.processKind = .memory
         case .energy: block.style.height = 640
         case .accounts: block.style.height = 520
@@ -144,7 +170,10 @@ struct StudioBoardPane: View {
         return BoardEditing(
             selection: model.boardSelection,
             select: { id in model.boardSelection = id },
-            move: { id, edge, target in model.editBoard { $0.move(id, to: edge, of: target) }; model.boardSelection = id },
+            move: { id, edge, target in
+                let targets = model.design.ruleTargets
+                model.editBoard { $0.move(id, to: edge, of: target, keeping: targets) }; model.boardSelection = id
+            },
             insert: { kind, edge, target in model.addBlock(kind, edge: edge, target: target) })
     }
 }
@@ -154,7 +183,8 @@ private struct BoardPalette: View {
     @ObservedObject var model: StudioModel
     private let groups: [(String, [BoardBlockKind])] = [
         ("Layout", [.stack, .row, .card, .divider, .spacer]),
-        ("Content", [.text, .value, .chart, .gauge, .stats, .button, .output, .script]),
+        ("Content", [.text, .value, .chart, .gauge, .stats, .button, .toggle, .image]),
+        ("From a command", [.output, .script, .blocks]),
         ("MenuSprite panels", [.processes, .energy, .accounts, .readings])
     ]
     var body: some View {
@@ -227,11 +257,15 @@ private struct BoardInspector: View {
                             Button("Move down") { model.editBoard { $0.shift(id, by: 1) } }
                             Button("Duplicate") { var copy: String?; model.editBoard { copy = $0.duplicate(id) }; model.boardSelection = copy }
                             Divider()
-                            Button("Delete", role: .destructive) { model.editBoard { $0.delete(id) }; model.boardSelection = nil }
+                            Button("Delete", role: .destructive) {
+                                let targets = model.design.ruleTargets
+                                model.editBoard { $0.delete(id, keeping: targets) }; model.boardSelection = nil
+                            }
                         } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     }
                 }
                 content(block)
+                if block.kind.takesClickAction { clickAction(block) }
                 StudioSection(title: "Look") {
                     VStack(alignment: .leading, spacing: 8) {
                         InspectorField("Colour") { ColorChoice(value: model.block(id, \.style.color, fallback: "inherit")) }
@@ -252,6 +286,10 @@ private struct BoardInspector: View {
                         InspectorField("Padding") {
                             Slider(value: model.block(id, \.style.padding, fallback: 0, coalesce: true), in: 0...20, step: 1).frame(width: 160)
                         }
+                        InspectorField("Background") { BackgroundChoice(value: model.block(id, \.style.background, fallback: "none")) }
+                        if model.board?.root.parent(of: id)?.0.kind == .row {
+                            Toggle("Fit its content (its natural width; the others share the rest)", isOn: model.block(id, \.style.fit, fallback: false))
+                        }
                         if !isRoot { Toggle("Hidden (rules can show it)", isOn: model.block(id, \.style.hidden, fallback: false)) }
                     }
                 }
@@ -267,6 +305,14 @@ private struct BoardInspector: View {
             Text("Nothing").tag(String?.none)
             ForEach(model.design.variables.filter(filter)) { Text($0.name).tag(String?.some($0.id)) }
         }.labelsHidden().frame(maxWidth: 220)
+    }
+    /// A gauge's or big value's secondary text, values as {key}.
+    private func detail(_ id: String) -> some View {
+        InspectorField("Detail") {
+            TextField("e.g. {used} of {limit}", text: Binding(get: { TextTemplate.string(model.design.board?.root.find(id)?.detail ?? []) },
+                                                               set: { value in model.editBoard(coalesce: true) { $0.root.update(id) { $0.detail = TextTemplate.parse(value) } } }))
+                .textFieldStyle(.roundedBorder)
+        }
     }
     private func template(_ id: String, placeholder: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -292,6 +338,8 @@ private struct BoardInspector: View {
                 Picker("Style", selection: model.block(id, \.style.textStyle, fallback: .body)) {
                     ForEach(BoardTextStyle.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.frame(maxWidth: 220)
+                TextField("SF Symbol before the text (optional)", text: model.block(id, \.symbol, fallback: "", coalesce: true)).textFieldStyle(.roundedBorder)
+                lines(block)
             }
         case .card:
             StudioSection(title: "Card title") { template(id, placeholder: "Title") }
@@ -301,10 +349,15 @@ private struct BoardInspector: View {
                 template(id, placeholder: "Caption (defaults to the value's name)")
                 Toggle("Huge", isOn: Binding(get: { block.style.textStyle == .huge },
                                               set: { value in model.editBoard { $0.root.update(id) { $0.style.textStyle = value ? .huge : .body } } }))
+                detail(id)
+                Text("A second line under the number, e.g. {used} of {limit}.").font(.caption2).foregroundStyle(.tertiary)
+                lines(block)
             }
         case .chart:
             StudioSection(title: "Chart") {
-                variablePicker(id) { $0.readingID != nil }
+                variablePicker(id)
+                Text("Readings chart their history; a command value charts the numbers it printed while the board was open (or always, when it runs in the background); fixed text charts a list like 3, 5, 2.")
+                    .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
                 template(id, placeholder: "Caption")
                 InspectorField("Height") { Slider(value: model.block(id, \.style.height, fallback: 44, coalesce: true), in: 20...160).frame(width: 160) }
             }
@@ -315,6 +368,8 @@ private struct BoardInspector: View {
                 InspectorField("Full at") {
                     TextField("100", value: model.block(id, \.style.maximum, fallback: 100, coalesce: true), format: .number).frame(width: 80)
                 }
+                detail(id)
+                Text("Shown on the right in place of the value, e.g. {used} of {limit}.").font(.caption2).foregroundStyle(.tertiary)
             }
         case .stats:
             StudioSection(title: "Values listed") {
@@ -331,21 +386,14 @@ private struct BoardInspector: View {
                 template(id, placeholder: "Title")
                 TextField("SF Symbol (optional)", text: model.block(id, \.symbol, fallback: "", coalesce: true)).textFieldStyle(.roundedBorder)
                 Picker("Does", selection: Binding(get: { block.action?.kind ?? .runCommand }, set: { kind in
-                    model.editBoard { $0.root.update(id) { $0.action = BoardAction(kind: kind, value: $0.action?.value ?? "") } }
+                    model.editBoard { $0.root.update(id) { $0.action = BoardAction(kind: kind, value: $0.action?.value ?? "", timeout: $0.action?.timeout) } }
                 })) { ForEach(BoardActionKind.allCases, id: \.self) { Text($0.title).tag($0) } }.frame(maxWidth: 240)
-                if block.action?.kind != .refresh {
-                    let value = Binding(get: { block.action?.value ?? "" }, set: { text in
-                        model.editBoard(coalesce: true) { $0.root.update(id) { $0.action = BoardAction(kind: $0.action?.kind ?? .runCommand, value: text) } }
-                    })
-                    if block.action?.kind == .runCommand {
-                        TextEditor(text: value).font(.system(size: 12, design: .monospaced)).frame(height: 54)
-                            .scrollContentBackground(.hidden).padding(4)
-                            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                        Text("Runs with /bin/zsh when pressed; its output shows under the button.").font(.caption2).foregroundStyle(.tertiary)
-                    } else {
-                        TextField(placeholder(block.action?.kind), text: value).textFieldStyle(.roundedBorder)
-                    }
+                actionFields(block, \.action)
+                if block.action?.kind == .runCommand {
+                    Text("Runs with /bin/zsh in the sprite's folder when pressed; its output shows under the button, then the sprite's commands run again so the board shows what changed.")
+                        .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
                 }
+                lines(block)
             }
         case .output:
             StudioSection(title: "Command output") {
@@ -353,8 +401,26 @@ private struct BoardInspector: View {
                 Text("Shows everything a command value printed. Add one under Values → The output of a command.").font(.caption2).foregroundStyle(.tertiary)
                 InspectorField("Height") { Slider(value: model.block(id, \.style.height, fallback: 90, coalesce: true), in: 30...300).frame(width: 160) }
             }
-        case .script:
+        case .script, .blocks:
             ScriptInspector(model: model, store: store, block: block)
+        case .image:
+            ImageInspector(model: model, block: block)
+        case .toggle:
+            StudioSection(title: "Switch") {
+                template(id, placeholder: "Title (defaults to the value's name)")
+                TextField("SF Symbol (optional)", text: model.block(id, \.symbol, fallback: "", coalesce: true)).textFieldStyle(.roundedBorder)
+                variablePicker(id)
+                Text("On while the value is a non-zero number or reads true, on, yes, enabled, active, up, connected or running.")
+                    .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                InspectorField("Turning it on runs") { actionEditor(id, \.action) }
+                InspectorField("Turning it off runs") { actionEditor(id, \.offAction) }
+                timeout(Binding(get: { block.action?.timeout ?? block.offAction?.timeout ?? BoardAction.defaultTimeout }, set: { seconds in
+                    model.editBoard(coalesce: true) { $0.root.update(id) { b in let stored = BoardAction.stored(timeout: seconds); b.action?.timeout = stored; b.offAction?.timeout = stored } }
+                }))
+                Text("Both run with /bin/zsh in the sprite's folder; the sprite's commands run again afterwards so the switch shows what happened. Its colour fills the switch when it is on.")
+                    .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                lines(block)
+            }
         case .processes:
             StudioSection(title: "Process list") {
                 Picker("Ranks by", selection: model.block(id, \.style.processKind, fallback: .memory)) {
@@ -376,6 +442,81 @@ private struct BoardInspector: View {
             EmptyView()
         }
     }
+    /// A switch's command for one direction.
+    private func actionEditor(_ id: String, _ path: WritableKeyPath<BoardBlock, BoardAction?>) -> some View {
+        TextEditor(text: Binding(get: { model.design.board?.root.find(id)?[keyPath: path]?.value ?? "" }, set: { text in
+            model.editBoard(coalesce: true) { $0.root.update(id) { b in
+                b[keyPath: path] = text.isEmpty ? nil : BoardAction(kind: .runCommand, value: text, timeout: b[keyPath: path]?.timeout)
+            } }
+        }))
+        .font(.system(size: 12, design: .monospaced)).frame(height: 44)
+        .scrollContentBackground(.hidden).padding(4)
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+    }
+    /// What an action works on (a command, link, app or text to copy) and, for a command, how long it may run.
+    @ViewBuilder private func actionFields(_ block: BoardBlock, _ path: WritableKeyPath<BoardBlock, BoardAction?>) -> some View {
+        let id = block.id
+        let action = block[keyPath: path]
+        if let action, action.kind != .refresh {
+            let value = Binding(get: { model.design.board?.root.find(id)?[keyPath: path]?.value ?? "" }, set: { text in
+                model.editBoard(coalesce: true) { $0.root.update(id) { b in b[keyPath: path]?.value = text } }
+            })
+            if action.kind == .runCommand {
+                TextEditor(text: value).font(.system(size: 12, design: .monospaced)).frame(height: 54)
+                    .scrollContentBackground(.hidden).padding(4)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                timeout(Binding(get: { action.timeout ?? BoardAction.defaultTimeout }, set: { seconds in
+                    model.editBoard(coalesce: true) { $0.root.update(id) { b in b[keyPath: path]?.timeout = BoardAction.stored(timeout: seconds) } }
+                }))
+            } else {
+                TextField(placeholder(action.kind), text: value).textFieldStyle(.roundedBorder)
+            }
+        }
+    }
+    /// How long a command action may run, 1 s to ten minutes.
+    private func timeout(_ seconds: Binding<Double>) -> some View {
+        InspectorField("Stop after") {
+            HStack(spacing: 4) {
+                TextField("30", value: Binding(get: { seconds.wrappedValue }, set: { value in
+                    let clamped = min(BoardAction.longestTimeout, max(1, value))
+                    seconds.wrappedValue = clamped
+                }), format: .number).frame(width: 56)
+                Text("s (up to 600)").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+    /// Text that may be cut to a number of lines, and where.
+    private func lines(_ block: BoardBlock) -> some View {
+        let id = block.id
+        return HStack {
+            Stepper(block.style.lines == 0 ? "Lines: all" : "Lines: at most \(block.style.lines)",
+                    value: model.block(id, \.style.lines, fallback: 0), in: 0...20)
+            if block.style.lines > 0 {
+                Picker("Cut at", selection: model.block(id, \.style.truncate, fallback: .tail)) {
+                    Text("End").tag(BoardTruncation.tail); Text("Middle").tag(BoardTruncation.middle); Text("Start").tag(BoardTruncation.head)
+                }.pickerStyle(.segmented).labelsHidden().frame(width: 150).help("Where text that does not fit is cut; the whole text shows on hover")
+            }
+        }
+    }
+    /// Any block but a button or switch can run an action when clicked anywhere on it.
+    private func clickAction(_ block: BoardBlock) -> some View {
+        let id = block.id
+        return StudioSection(title: "When clicked") {
+            Picker("Does", selection: Binding<BoardActionKind?>(get: { block.action?.kind }, set: { kind in
+                model.editBoard { $0.root.update(id) { b in
+                    b.action = kind.map { BoardAction(kind: $0, value: b.action?.value ?? "", timeout: b.action?.timeout) }
+                } }
+            })) {
+                Text("Nothing").tag(BoardActionKind?.none)
+                ForEach(BoardActionKind.allCases, id: \.self) { Text($0.title).tag(BoardActionKind?.some($0)) }
+            }.frame(maxWidth: 240)
+            actionFields(block, \.action)
+            if block.action != nil {
+                Text("The whole block is clickable on the board: it lights up under the pointer, a link shows a small arrow, and a command shows a spinner, then its outcome, then runs the sprite's commands again.")
+                    .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
     private func placeholder(_ kind: BoardActionKind?) -> String {
         switch kind {
         case .openURL: "https://…"
@@ -386,24 +527,29 @@ private struct BoardInspector: View {
     }
 }
 
-/// A script block: its command, how often it runs, and what the output format means.
+/// A script-rows or script-blocks block: its command, how often it runs, and what its output must look like.
 private struct ScriptInspector: View {
     @ObservedObject var model: StudioModel
     @ObservedObject var store: MonitoringStore
     let block: BoardBlock
+    @State private var cache = ScriptBlocksCache()
 
     private func update(coalesce: Bool = false, _ body: @escaping (inout CommandSource) -> Void) {
         model.editBoard(coalesce: coalesce) { $0.root.update(block.id) { b in var source = b.command ?? CommandSource(); body(&source); b.command = source } }
     }
+    private var printsBlocks: Bool { block.kind == .blocks }
     var body: some View {
         let command = block.command ?? CommandSource()
-        let result = store.commands.results[command.normalized]
-        StudioSection(title: "Script rows") {
+        let result = store.commands.result(for: command)
+        let running = store.commands.running.contains(command.normalized)
+        StudioSection(title: printsBlocks ? "Script blocks" : "Script rows") {
             TextEditor(text: Binding(get: { command.command }, set: { value in update(coalesce: true) { $0.command = value } }))
-                .font(.system(size: 11, design: .monospaced)).frame(height: 110)
+                .font(.system(size: 11, design: .monospaced)).frame(height: printsBlocks ? 150 : 110)
                 .scrollContentBackground(.hidden).padding(4)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-            Text("Each printed line is a row. After a `|`: color=red sfimage=bolt href=https://… bash='command' size=13 font=Menlo. A line of --- is a divider; a leading -- indents. Same format as SwiftBar.")
+            Text(printsBlocks
+                 ? "Print a JSON list of blocks, or {\"blocks\": [...]}, in the board's own vocabulary: text, value, gauge, chart, stats, button, toggle, image, card, row… Literal data works ({\"gauge\": 45}, {\"chart\": [3, 5, 2]}) and so do this sprite's {values}. Runs in the sprite's folder while the board is open; `menusprite guide` has the full list."
+                 : "Each printed line is a row. After a `|`: color=red sfimage=bolt href=https://… bash='command' size=13 font=Menlo weight=bold length=40 tooltip='…'. A line of --- is a divider; a leading -- indents. Same format as SwiftBar.")
                 .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Picker("Every", selection: Binding(get: { command.interval }, set: { value in update { $0.interval = value } })) {
@@ -411,12 +557,98 @@ private struct ScriptInspector: View {
                         Text(seconds >= 3600 ? "\(Int(seconds / 3600)) h" : seconds >= 60 ? "\(Int(seconds / 60)) min" : "\(Int(seconds)) s").tag(seconds)
                     }
                 }.frame(width: 120)
-                Button { Task { await store.commands.run(command) } } label: { Label("Run now", systemImage: "play.fill") }
+                Button { Task { await store.commands.run(command) } } label: { Label(running ? "Running…" : "Run now", systemImage: "play.fill") }
+                    .disabled(running || command.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            if let result {
-                Text(result.problem ?? "\(ScriptLine.parse(result.output).count) rows · \(String(format: "%.2f", result.elapsed)) s")
-                    .font(.caption).foregroundStyle(result.problem == nil ? Color.green : Color.orange)
+            Stepper("Stop after \(Int(command.timeout)) s", value: Binding(get: { command.timeout }, set: { value in update { $0.timeout = value } }), in: 1...60)
+            if let result { summary(result) }
+        }
+    }
+
+    @ViewBuilder private func summary(_ result: CommandResult) -> some View {
+        let elapsed = "\(String(format: "%.2f", result.elapsed)) s"
+        if printsBlocks, !result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let parsed = cache.parse(result.output, design: model.design, directory: BoardScriptBlocks.directory(of: block.command ?? CommandSource()))
+            let problems = parsed.diagnostics.filter { $0.severity == .error }
+            Text(problems.isEmpty ? "\(parsed.blocks.count) blocks · \(elapsed)" + (parsed.diagnostics.isEmpty ? "" : " · \(parsed.diagnostics.count) warnings")
+                 : "\(problems.count) problems · \(elapsed)")
+                .font(.caption).foregroundStyle(problems.isEmpty && result.problem == nil ? Color.green : Color.orange)
+            ForEach(Array(parsed.diagnostics.prefix(4).enumerated()), id: \.offset) { _, diagnostic in
+                Text(diagnostic.description).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                    .lineLimit(3).textSelection(.enabled)
+            }
+        } else if printsBlocks {
+            Text(BoardActions.failure(result.problem ?? "Printed nothing", errorOutput: result.errorOutput))
+                .font(.caption).foregroundStyle(.orange).lineLimit(8).textSelection(.enabled)
+        } else if let problem = result.problem {
+            Text(BoardActions.failure(problem, errorOutput: result.errorOutput))
+                .font(.caption).foregroundStyle(.orange).lineLimit(8).textSelection(.enabled)
+        } else {
+            Text("\(ScriptLine.parse(result.output).count) rows · \(elapsed)").font(.caption).foregroundStyle(.green)
+        }
+    }
+}
+
+/// An image block: where the picture comes from and how tall it may be.
+private struct ImageInspector: View {
+    @ObservedObject var model: StudioModel
+    let block: BoardBlock
+
+    var body: some View {
+        StudioSection(title: "Image") {
+            HStack {
+                TextField("File, ~/path, name in the sprite's folder, or https://…", text: model.block(block.id, \.source, fallback: "", coalesce: true))
+                    .textFieldStyle(.roundedBorder)
+                Button("Choose…", action: choose)
+            }
+            Text("A file is read again whenever it changes, so a script can redraw it. Links must be https.")
+                .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+            InspectorField("Height") {
+                Slider(value: model.block(block.id, \.style.height, fallback: 120, coalesce: true), in: 20...400, step: 1).frame(width: 160)
             }
         }
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let id = block.id
+        model.editBoard { $0.root.update(id) { $0.source = url.path } }
+    }
+}
+
+/// Swatches for a block's fill: none, a few that read well behind text, or any colour.
+private struct BackgroundChoice: View {
+    @Binding var value: String
+    static let presets = ["1C1C1E", "2C2C2E", "3A3A3C", "E5E5EA", "0A84FF", "30D158", "FF9F0A", "FF453A", "BF5AF2", "1E3A5F", "3B2A14", "143A2B"]
+
+    var body: some View {
+        FlowLayout(spacing: 5) {
+            swatch("none", help: "No fill") {
+                Image(systemName: "circle.slash").font(.system(size: 13)).foregroundStyle(.secondary)
+            }
+            ForEach(Self.presets, id: \.self) { hex in
+                swatch(hex, help: "#\(hex)") { Circle().fill(spriteColor(hex)).frame(width: 14, height: 14) }
+            }
+            if SpriteColors.system(value) != nil {
+                swatch(value, help: "\(value) (Apple's system colour, adapts to light and dark)") {
+                    Circle().fill(spriteColor(value)).frame(width: 14, height: 14)
+                }
+            }
+            ColorPicker("", selection: Binding(
+                get: { SpriteColors.color(value).map { Color(nsColor: $0) } ?? .gray },
+                set: { value = ColorChoice.hex($0) ?? value }), supportsOpacity: false)
+                .labelsHidden().frame(width: 26).help("Any colour")
+        }
+    }
+    private func swatch<Content: View>(_ hex: String, help: String, @ViewBuilder content: () -> Content) -> some View {
+        Button { value = hex } label: {
+            content().frame(width: 20, height: 20)
+                .overlay(Circle().stroke(value.uppercased() == hex.uppercased() ? Color.accentColor : Color.secondary.opacity(0.3),
+                                         lineWidth: value.uppercased() == hex.uppercased() ? 2 : 1))
+        }.buttonStyle(.plain).help(help)
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import SpriteSpec
 import SwiftUI
 import SystemMonitoring
 
@@ -136,6 +137,240 @@ enum SpriteStudioRenderHarness {
                        size: NSSize(width: 380, height: 860), to: directory.appendingPathComponent("board-live-showcase.png"))
         store.closeBoard(showcase.id); store.preview(design: nil)
         report.append("board live showcase → board-live-showcase.png")
+        await writeNewBlocks(store: store, base: cpu, directory: directory, report: &report)
+        await writeAgentBlocks(store: store, base: cpu, directory: directory, report: &report)
+        writeFaceOpacity(store: store, base: cpu, to: directory.appendingPathComponent("face-opacity.png"), report: &report)
+    }
+
+    /// What agents asked for in their trials, in one board: gauges and switches that show their colour
+    /// off-screen (this window is never key), clickable rows and links, text cut to a line, a row whose
+    /// figure takes its natural width, script rows with weight, length and adaptive colours, and a script
+    /// row and script block that fail with the end of their stderr.
+    static func writeAgentBlocks(store: MonitoringStore, base: SpriteConfiguration, directory: URL, report: inout [String]) async {
+        var showcase = base
+        var design = showcase.design ?? SpriteDesign()
+        design.variables += [
+            SpriteVariable(id: "disk", name: "Disk", source: .constant(text: "72")),
+            SpriteVariable(id: "on", name: "On", source: .constant(text: "on")),
+            SpriteVariable(id: "off", name: "Off", source: .constant(text: "off")),
+            SpriteVariable(id: "count", name: "Count", source: .constant(text: "1,284"))
+        ]
+        func gauge(_ caption: String, color: String) -> BoardBlock {
+            var block = BoardBlock(kind: .gauge, name: caption, segments: [.literal(caption)], variable: "disk")
+            block.style.color = color; return block
+        }
+        let gauges = BoardBlock(kind: .card, name: "Gauges", children: [gauge("Accent (no colour)", color: "inherit"), gauge("teal", color: "teal"),
+                                                                        gauge("#FF453A", color: "FF453A")], segments: [.literal("Gauges")])
+        func toggle(_ title: String, value: String, color: String) -> BoardBlock {
+            var block = BoardBlock(kind: .toggle, name: title, segments: [.literal(title)], variable: value, symbol: "power",
+                                   action: BoardAction(value: "true"), offAction: BoardAction(value: "true"))
+            block.style.color = color; return block
+        }
+        let switches = BoardBlock(kind: .card, name: "Switches", children: [toggle("On, accent", value: "on", color: "inherit"),
+                                                                            toggle("On, orange", value: "on", color: "orange"),
+                                                                            toggle("Off", value: "off", color: "orange")], segments: [.literal("Switches")])
+        var link = BoardBlock.text("A clickable row that opens a link", style: .body)
+        link.symbol = "link"; link.action = BoardAction(kind: .openURL, value: "https://menusprite.prerakgada.in")
+        var pr = BoardBlock(kind: .stack, children: [BoardBlock.text("#327 Fix the long name wrapping in rows", style: .headline),
+                                                    BoardBlock.text("opened 2 h ago by prerak", style: .caption)], style: { var s = BoardStyle(); s.spacing = 2; return s }())
+        pr.action = BoardAction(kind: .openURL, value: "https://github.com")
+        var run = BoardBlock.text("A clickable row that runs a command", style: .body)
+        run.symbol = "play.circle"; run.action = BoardAction(kind: .runCommand, value: "echo ran")
+        var cut = BoardBlock.text("2f9c1e7a-4b6d-4c1e-9a8f-0b2d3c4e5f60-compose-service-web-1", style: .mono)
+        cut.style.lines = 1; cut.style.truncate = .middle
+        var name = BoardBlock.text("SBMP-Canteen-Cookbook/hungrybrain_monorepo-worktrees/zeptomail", style: .body)
+        name.style.lines = 1
+        var figure = BoardBlock.text("{count} files", style: .headline); figure.segments = [.value("count"), .literal(" files")]
+        figure.style.fit = true; figure.style.align = .trailing
+        let fitRow = BoardBlock(kind: .row, name: "Fit row", children: [name, figure])
+        var named = BoardBlock.text("Teal fill by name", style: .caption); named.style.background = "teal"
+        let rows = BoardBlock(kind: .script, name: "Script rows", command: CommandSource(command: """
+        echo "Section header | weight=bold"
+        echo "Helvetica-Bold header | font=Helvetica-Bold color=orange"
+        echo "A very long pull request title that would wrap onto a second line | length=40 href=https://github.com"
+        echo "Adaptive green | color=green sfimage=checkmark.circle.fill"
+        echo "Runs a command | bash='echo hi' sfimage=terminal"
+        """, interval: 60))
+        let failing = BoardBlock(kind: .script, name: "Failing rows", command: CommandSource(command: """
+        echo "Partial row before the failure"
+        printf 'Traceback (most recent call last):\\n  File "prs.py", line 12, in <module>\\n    raise SystemExit(done.stderr.strip().splitlines()[0] if done.stderr else "gh failed and said nothing at all about why")\\nSystemExit: gh: authentication token expired (run gh auth login)\\n' >&2
+        exit 1
+        """, interval: 60))
+        let failingBlocks = BoardBlock(kind: .blocks, name: "Failing blocks", command: CommandSource(command: """
+        python3 -c 'raise ValueError("rate limited until 14:05")'
+        """, interval: 60))
+        design.board = BoardDesign(root: .stack([gauges, switches, link, pr, run, cut, fitRow, named, BoardBlock(kind: .divider), rows,
+                                                 BoardBlock(kind: .divider), failing, failingBlocks], spacing: 12), width: 380)
+        showcase.design = design
+        store.preview(design: design)
+        store.openBoard(showcase.id)
+        try? await Task.sleep(for: .milliseconds(400))
+        for command in design.boardScriptCommands { await store.commands.run(command) }
+        for (suffix, appearance) in [("", NSAppearance.Name.darkAqua), ("-light", .aqua)] {
+            let live = BoardView(config: showcase, environment: BoardEnvironment(monitoring: store, power: nil))
+                .background(Color(nsColor: .windowBackgroundColor))
+            let name = "board-agent-blocks\(suffix).png"
+            await snapshot(live.frame(width: 380, height: 1260, alignment: .top), appearance: appearance,
+                           size: NSSize(width: 380, height: 1260), to: directory.appendingPathComponent(name))
+            report.append("board agent blocks → \(name)")
+        }
+        store.closeBoard(showcase.id); store.preview(design: nil)
+
+        // The inspector with a clickable text selected: lines, icon and its click action.
+        let model = StudioModel(config: showcase, store: store)
+        model.showingBoard = true
+        model.boardSelection = run.id
+        await snapshot(SpriteStudio(model: model, store: store, close: {}).frame(width: 1400, height: 1500), appearance: .darkAqua,
+                       size: NSSize(width: 1400, height: 1500), to: directory.appendingPathComponent("board-studio-clickable.png"))
+        model.boardSelection = figure.id
+        await snapshot(SpriteStudio(model: model, store: store, close: {}).frame(width: 1400, height: 1500), appearance: .darkAqua,
+                       size: NSSize(width: 1400, height: 1500), to: directory.appendingPathComponent("board-studio-fit.png"))
+        model.close()
+        report.append("board studio clickable → board-studio-clickable.png, fit → board-studio-fit.png")
+    }
+
+    /// The same face with its whole row at full opacity and at 0.35: a container's opacity reaches its pieces.
+    static func writeFaceOpacity(store: MonitoringStore, base: SpriteConfiguration, to url: URL, report: inout [String]) {
+        let height = NSStatusBar.system.thickness
+        var faded = base.design ?? SpriteDesign()
+        faded.root.style.opacity = 0.35
+        guard let full = store.renderDesign(base, design: base.design ?? SpriteDesign(), height: height),
+              let dim = store.renderDesign(base, design: faded, height: height) else { return }
+        let size = NSSize(width: (full.size.width + dim.size.width) * scale + 60, height: height * scale + 20)
+        let picture = NSImage(size: size, flipped: false) { rect in
+            NSColor(white: 0.1, alpha: 1).setFill(); rect.fill()
+            tinted(full.image, dark: true).draw(in: NSRect(x: 20, y: 10, width: full.size.width * scale, height: height * scale))
+            tinted(dim.image, dark: true).draw(in: NSRect(x: 40 + full.size.width * scale, y: 10, width: dim.size.width * scale, height: height * scale))
+            return true
+        }
+        guard let tiff = picture.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return }
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
+        report.append("face opacity: full signature \(full.signature.suffix(40)) · faded \(dim.signature.suffix(40)) → \(url.lastPathComponent)")
+    }
+
+    /// The blocks agents lean on: a command that prints blocks (literal gauge, value, chart and stats, and
+    /// a button), an image a script wrote, switches, detail lines, fills, and a command value's chart.
+    static func writeNewBlocks(store: MonitoringStore, base: SpriteConfiguration, directory: URL, report: inout [String]) async {
+        let scratch = directory.appendingPathComponent("new-blocks", isDirectory: true)
+        try? FileManager.default.removeItem(at: scratch)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let picture = scratch.appendingPathComponent("picture.png")
+        writePicture(to: picture)
+
+        var showcase = base
+        var design = showcase.design ?? SpriteDesign()
+        let cpuID = design.variables.first { $0.readingID == "cpu.usage" }?.id ?? design.variables.first?.id ?? "cpu"
+        var load = CommandSource(command: "echo $(( RANDOM % 40 + 20 ))", interval: 2, output: .number)
+        load.directory = scratch.path
+        design.variables += [
+            SpriteVariable(id: "used", name: "Used", source: .constant(text: "9.4 GB")),
+            SpriteVariable(id: "limit", name: "Limit", source: .constant(text: "16 GB")),
+            SpriteVariable(id: "memory", name: "Memory", source: .constant(text: "58.75")),
+            SpriteVariable(id: "focus", name: "Focus", source: .constant(text: "off")),
+            SpriteVariable(id: "vpn", name: "VPN", source: .command(CommandSource(command: "echo Connected", interval: 30))),
+            SpriteVariable(id: "load", name: "Load", source: .command(load))
+        ]
+
+        var value = BoardBlock(kind: .value, name: "Now", variable: cpuID, detail: [.literal("across "), .value("used")])
+        value.segments = [.literal("CPU")]
+        var gauge = BoardBlock(kind: .gauge, name: "Memory", segments: [.literal("Memory")], variable: "memory",
+                               detail: [.value("used"), .literal(" of "), .value("limit")])
+        gauge.style.color = "30D158"
+        var card = BoardBlock(kind: .card, name: "Filled card", children: [BoardBlock(kind: .row, children: [value, gauge])],
+                              segments: [.literal("Fill and detail")])
+        card.style.background = "1E3A5F"; card.style.spacing = 8
+        var chart = BoardBlock(kind: .chart, name: "Command chart", segments: [.literal("Load (a command value)")], variable: "load")
+        chart.style.height = 36
+        let vpn = BoardBlock(kind: .toggle, name: "VPN", segments: [.literal("VPN")], variable: "vpn", symbol: "lock.shield",
+                             action: BoardAction(kind: .runCommand, value: "echo up"), offAction: BoardAction(kind: .runCommand, value: "echo down"))
+        let focus = BoardBlock(kind: .toggle, name: "Focus", segments: [.literal("Focus")], variable: "focus", symbol: "moon",
+                               action: BoardAction(kind: .runCommand, value: "true"), offAction: BoardAction(kind: .runCommand, value: "true"))
+        var image = BoardBlock(kind: .image, name: "Picture", source: picture.path); image.style.height = 90
+        var missing = BoardBlock(kind: .image, name: "Missing", source: "not-written-yet.png"); missing.style.height = 56
+        var note = BoardBlock.text("Yellow fill, so the text turns black", style: .caption); note.style.background = "FFD60A"
+        var printed = CommandSource(command: """
+        cat <<JSON
+        {"blocks": [
+          {"card": [
+            {"row": [{"value": "12.4 GB", "caption": "Cache"}, {"gauge": 62, "caption": "Quota", "detail": "62 of 100"}]},
+            {"chart": [3, 5, 2, 8, 6, 9, 7, 11], "caption": "Builds per day", "height": 36},
+            {"stats": [{"name": "Open", "value": 3}, {"name": "Merged", "value": 12}, "\(cpuID)"]}
+          ], "title": "Printed by a script", "background": "#2C2C2E"},
+          {"row": [{"image": "picture.png", "height": 48}, {"toggle": "Printed switch", "value": true, "on": "true", "off": "true"}]},
+          {"text": "CPU now {\(cpuID)} · from $PWD", "font": "caption"},
+          {"text": "A printed row that opens a link", "open": "https://menusprite.prerakgada.in"},
+          {"button": "Say hello", "icon": "hand.wave", "run": "echo hello"}
+        ]}
+        JSON
+        """, interval: 30)
+        printed.directory = scratch.path
+        let blocks = BoardBlock(kind: .blocks, name: "Script blocks", command: printed)
+        design.board = BoardDesign(root: .stack([card, chart, vpn, focus, image, missing, note, BoardBlock(kind: .divider), blocks], spacing: 12), width: 380)
+        showcase.design = design
+        store.preview(design: design)
+        store.openBoard(showcase.id)
+        // Let the store's demand settle first, so the runs below land where the board looks.
+        try? await Task.sleep(for: .milliseconds(400))
+        for _ in 0..<8 { await store.commands.run(load) }
+        for command in design.commandVariables.compactMap(\.command) + design.boardScriptCommands { await store.commands.run(command) }
+        let output = store.commands.result(for: printed)?.output ?? ""
+        let parsed = SpriteSpecFormat.scriptBlocks(output, design: design, directory: scratch.path)
+        report.append("script blocks: \(parsed.blocks.count) blocks, \(parsed.variables.count) literal values, diagnostics \(parsed.diagnostics.map(\.description))")
+        report.append("load history: \(store.commands.points(for: load).map { BoardChartSeries.compact($0.value) }.joined(separator: " "))")
+        for (suffix, appearance) in [("", NSAppearance.Name.darkAqua), ("-light", .aqua)] {
+            let live = BoardView(config: showcase, environment: BoardEnvironment(monitoring: store, power: nil))
+                .background(Color(nsColor: .windowBackgroundColor))
+            let name = "board-new-blocks\(suffix).png"
+            await snapshot(live.frame(width: 380, height: 1180, alignment: .top), appearance: appearance,
+                           size: NSSize(width: 380, height: 1180), to: directory.appendingPathComponent(name))
+            report.append("board new blocks → \(name)")
+        }
+        store.closeBoard(showcase.id); store.preview(design: nil)
+
+        // The studio's inspector for each new kind, with the block selected as a click would.
+        for (label, selected) in [("switch", vpn.id), ("script-blocks", blocks.id), ("image", image.id), ("fill", note.id)] {
+            let model = StudioModel(config: showcase, store: store)
+            model.showingBoard = true
+            model.boardSelection = selected
+            // Tall enough that the inspector shows its Look section without scrolling.
+            let studio = SpriteStudio(model: model, store: store, close: {}).frame(width: 1400, height: 1500)
+            await snapshot(studio, appearance: .darkAqua, size: NSSize(width: 1400, height: 1500),
+                           to: directory.appendingPathComponent("board-studio-\(label).png"))
+            model.close()
+            report.append("board studio \(label) → board-studio-\(label).png")
+        }
+
+        // Where commands run: the sprite's folder with SPRITE_DIR, else home; Homebrew and user bins first on PATH.
+        for (label, source) in [
+            ("in folder", CommandSource(command: "pwd; echo \"$SPRITE_DIR\"", directory: scratch.path)),
+            ("no folder", CommandSource(command: "pwd; echo \"[${SPRITE_DIR}]\"", directory: scratch.appendingPathComponent("absent").path)),
+            ("path", CommandSource(command: "echo $PATH | tr ':' ' '"))
+        ] {
+            let result = await CommandVariableRunner.execute(source.normalized, parse: false)
+            report.append("command \(label): \(result.output.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " | ")) \(result.problem ?? "")")
+        }
+        let quiet = await CommandVariableRunner.execute(CommandSource(command: "true").normalized, parse: false)
+        report.append("action printing nothing: problem \(quiet.problem ?? "none"), status \(quiet.status.map(String.init) ?? "nil")")
+    }
+
+    /// A small gradient PNG standing in for a chart a script drew.
+    static func writePicture(to url: URL) {
+        let size = NSSize(width: 320, height: 120)
+        let image = NSImage(size: size, flipped: false) { rect in
+            NSGradient(starting: NSColor(calibratedRed: 0.36, green: 0.27, blue: 0.86, alpha: 1),
+                       ending: NSColor(calibratedRed: 0.18, green: 0.82, blue: 0.62, alpha: 1))?.draw(in: rect, angle: 0)
+            let bars: [CGFloat] = [0.3, 0.55, 0.42, 0.8, 0.65, 0.9, 0.5]
+            NSColor.white.withAlphaComponent(0.85).setFill()
+            for (index, height) in bars.enumerated() {
+                NSBezierPath(roundedRect: NSRect(x: 24 + CGFloat(index) * 40, y: 14, width: 24, height: (rect.height - 40) * height),
+                             xRadius: 4, yRadius: 4).fill()
+            }
+            ("PNG written by a script" as NSString).draw(at: NSPoint(x: 14, y: rect.height - 22), withAttributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.white])
+            return true
+        }
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return }
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 
     static func snapshot<V: View>(_ view: V, appearance: NSAppearance.Name, size: NSSize, to url: URL) async {

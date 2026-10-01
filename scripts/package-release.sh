@@ -9,9 +9,7 @@ asset_name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["a
 mkdir -p "$release_root"
 "$repo_root/scripts/build-native.sh" --public-preview
 /usr/bin/codesign --verify --strict -R '=anchor apple generic and identifier "in.prerakgada.MenuSprite" and certificate leaf[subject.OU] = "RC63N3VU27" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' "$app_path"
-if [[ -e "$app_path/Contents/Resources/MenuSpritePowerHelper" ]] || compgen -G "$app_path/Contents/Resources/*power-helper.sh" >/dev/null; then
-    echo 'Refusing to distribute a public preview containing privileged tooling.' >&2; exit 1
-fi
+"$repo_root/scripts/verify-power-helper.sh" "$app_path" --developer-id
 if [[ "$(/usr/bin/lipo -archs "$app_path/Contents/MacOS/MenuSprite")" != 'arm64' ]]; then
     echo 'Release architecture is not the declared arm64 target.' >&2; exit 1
 fi

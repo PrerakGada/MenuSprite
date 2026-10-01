@@ -1,0 +1,68 @@
+{
+  "menusprite": 1,
+  "name": "System",
+  "icon": "cpu",
+  "every": 2,
+  "values": [
+    {"id": "cpu", "reading": "cpu.usage", "name": "CPU"},
+    {"id": "mem", "reading": "memory.usage", "name": "Memory"},
+    {"id": "pressure", "reading": "memory.pressure", "name": "Pressure"},
+    {"id": "power", "reading": "sensor.PSTR", "name": "Power"},
+    {"id": "temp", "reading": "sensor.cpuTemperature", "name": "CPU temperature"},
+    {"id": "load", "reading": "cpu.load1", "name": "Load (1 min)"},
+    {"id": "down", "reading": "network.download", "name": "Download"},
+    {"id": "up", "reading": "network.upload", "name": "Upload"},
+    {"id": "disk", "reading": "disk.usage", "name": "Disk"},
+    {"id": "free", "reading": "disk.available", "name": "Free"},
+    {"id": "uptime", "reading": "system.uptime", "name": "Uptime"}
+  ],
+  "face": {
+    "column": [
+      {"text": "CPU {cpu}", "id": "cpuText", "size": 9, "weight": "medium", "align": "leading"},
+      {"text": "MEM {mem}", "id": "memText", "size": 9, "weight": "medium", "align": "leading"}
+    ]
+  },
+  "rules": [
+    {"name": "Busy CPU", "when": "cpu >= 85", "then": [{"target": "cpuText", "color": "orange"}]},
+    {
+      "name": "Memory pressure",
+      "cases": [
+        {
+          "when": "pressure == Critical",
+          "then": [{"target": "memText", "color": "red"}, {"target": "memValue", "color": "red"}]
+        },
+        {
+          "when": "pressure == Warning",
+          "then": [{"target": "memText", "color": "orange"}, {"target": "memValue", "color": "orange"}]
+        }
+      ]
+    },
+    {"name": "Disk nearly full", "when": "disk >= 90", "then": [{"target": "diskGauge", "color": "orange"}]}
+  ],
+  "board": {
+    "width": 380,
+    "blocks": [
+      {
+        "row": [
+          {"value": "mem", "id": "memValue", "caption": "Memory", "detail": "{pressure}"},
+          {"value": "power", "caption": "System power", "detail": "CPU {temp}"},
+          {"value": "uptime", "caption": "Up for", "detail": "load {load}"}
+        ]
+      },
+      {
+        "card": [
+          {"chart": "cpu", "caption": "CPU", "height": 40},
+          {"chart": "down", "caption": "Download", "height": 32, "color": "teal"},
+          {"chart": "up", "caption": "Upload", "height": 32, "color": "indigo"}
+        ],
+        "title": "Recent"
+      },
+      {
+        "card": [{"gauge": "disk", "id": "diskGauge", "caption": "Startup disk", "detail": "{disk} used · {free} free"}],
+        "title": "Storage"
+      },
+      {"card": [{"processes": "cpu", "limit": 6}], "title": "Top processes"},
+      {"button": "Activity Monitor", "icon": "waveform.path.ecg", "app": "Activity Monitor"}
+    ]
+  }
+}

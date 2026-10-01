@@ -3,25 +3,22 @@ import PowerControl
 
 struct PowerView: View {
     @ObservedObject var store: PowerStore
-    let showPermissions: () -> Void
     var body: some View {
         VStack(spacing:0) {
             HStack {
                 VStack(alignment:.leading,spacing:5) {
                     Text(BuildFeatures.powerPageTitle).font(.system(size:25,weight:.semibold,design:.rounded))
-                    Text(BuildFeatures.publicPreview ? "Choose when your Mac stays awake." : "Choose when to charge, and when your Mac stays awake.").foregroundStyle(.secondary)
+                    Text("Choose when to charge, and when your Mac stays awake.").foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Permissions & Access",action:showPermissions).controlSize(.small)
                 Button("Refresh") { store.refresh() }.keyboardShortcut("r",modifiers:.command)
             }.padding(24)
             Divider()
             ScrollView {
                 VStack(alignment:.leading,spacing:20) {
-                    if BuildFeatures.privilegedPowerControls { battery }
+                    battery
                     awake
-                    if BuildFeatures.privilegedPowerControls { lid; helper }
-                    else { Text("Battery charging and closed-lid controls are not included in this public preview.").font(.callout).foregroundStyle(.secondary) }
+                    lid; helper
                     if let notice = store.notice { Text(notice).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
                 }.padding(24)
             }
@@ -230,11 +227,14 @@ struct PowerView: View {
                 HStack {
                     Text(store.helperStatus).fontWeight(.medium)
                     Spacer()
-                    Button("Show installer") { store.revealInstaller() }
-                    Button("Copy install command") { store.copyInstallCommand() }
+                    if let action = store.helperActionTitle { Button(action) { store.enableHelper() } }
+                    if store.helperState == .on || store.helperState == .needsApproval { Button("Turn off") { store.disableHelper() } }
                 }
-                Text(store.snapshot.capability).font(.caption).foregroundStyle(.secondary)
-                Text("The first developer build installs its signed helper through Terminal with your administrator password. It handles only battery controls and closed-lid sessions. Ordinary keep-awake needs no helper. Hardware writes and physical lid behavior still need on-device validation after installation.")
+                if let reason = store.helperReason {
+                    Text(reason).font(.callout).foregroundStyle(store.helperState == .missing ? .orange : .secondary).fixedSize(horizontal:false,vertical:true)
+                }
+                if store.helperInstalled { Text(store.snapshot.capability).font(.caption).foregroundStyle(.secondary) }
+                Text("Charge limits, discharge, Low Power Mode, fan speeds and the closed-lid mode need a small helper that runs as root. It ships inside MenuSprite, and macOS asks you to allow it once under System Settings → General → Login Items & Extensions. It accepts requests only from this signed app, and hands the fans, adapter and sleep back to macOS when MenuSprite quits, the Mac sleeps or the app stops answering. Keep-awake and every reading work without it.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
             }.padding(10)
         } label: { Label("MenuSprite power helper",systemImage:"lock.shield") }

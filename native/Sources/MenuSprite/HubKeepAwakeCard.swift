@@ -34,7 +34,7 @@ struct HubKeepAwakeCard: View {
             }
             disclosure("Options", open: $optionsOpen)
             if optionsOpen || showAll { options }
-            if BuildFeatures.privilegedPowerControls && power.helperInstalled {
+            if power.helperInstalled {
                 Divider()
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -53,7 +53,7 @@ struct HubKeepAwakeCard: View {
             }
         }
         // The lid switch depends on state only the root helper reads (who disabled sleep, if anyone).
-        .onAppear { if BuildFeatures.privilegedPowerControls && power.helperInstalled { power.refreshBatteryStatus() } }
+        .onAppear { if power.helperInstalled { power.refreshBatteryStatus() } }
     }
 
     /// Sleep is already off, but not by MenuSprite: taking it over would let MenuSprite turn sleep

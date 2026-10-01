@@ -44,7 +44,15 @@ final class EnergyDocumentView: NSView {
     var previewFlow: EnergyFlow?
     var flow: EnergyFlow { previewFlow ?? EnergyFlow(readings: monitoring.readings, maximumAge: maximumAge) }
     /// Something worth reading (a failed write, another battery app). Routine state is the bar's icons.
-    private var issue: String? { power.notice ?? power.batteryControlReason }
+    private var issue: String? { power.notice ?? power.batteryControlReason ?? helperOffer }
+    /// Without the helper macOS still takes 80–100% in 5% steps, so nothing is blocked; say once what turning it on adds.
+    private var helperOffer: String? {
+        guard let action = power.helperActionTitle, !power.helperInstalled else { return nil }
+        return "\(power.helperReason ?? "") \(action.replacingOccurrences(of: "…", with: "")) ›"
+    }
+    /// The warning row turns the helper on when that is what it is asking for.
+    private var issueOffersHelper: Bool { helperOffer != nil && issue == helperOffer }
+    private var issueRect: NSRect { NSRect(x: 12, y: 44, width: bounds.width - 24, height: 38) }
     var limitOrigin: CGFloat { 48 + (issue == nil ? 0 : 36) }
     var optionsOrigin: CGFloat { limitOrigin + (limitExpanded ? 186 : 0) }
     var flowRect: NSRect { NSRect(x: 0, y: optionsOrigin + (optionsExpanded ? 104 : 0), width: bounds.width, height: showFlow ? flowLayout(flow, top: 0).height : 0) }
@@ -267,10 +275,12 @@ final class EnergyDocumentView: NSView {
     override func resetCursorRects() {
         super.resetCursorRects()
         if limitDraggable { addCursorRect(batteryBar.insetBy(dx: 0, dy: -6), cursor: .resizeLeftRight) }
+        if issueOffersHelper { addCursorRect(issueRect, cursor: .pointingHand) }
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if issueOffersHelper, issueRect.contains(point) { power.enableHelper(); return }
         guard limitDraggable, batteryBar.insetBy(dx: -6, dy: -6).contains(point) else { super.mouseDown(with: event); return }
         draggingLimit = limit(atX: point.x); needsDisplay = true
     }

@@ -217,15 +217,15 @@ private struct ReloadStrip: View {
                 }
             }
             HStack(spacing: 10) {
-                Text("Auto-reload every").font(.system(size: 12)).foregroundStyle(.secondary)
-                Picker("Auto-reload every", selection: Binding(get: { store.refreshInterval },
+                Text("Reload").font(.system(size: 12)).foregroundStyle(.secondary)
+                Picker("Reload", selection: Binding(get: { store.refreshInterval },
                                                                set: { store.setRefreshInterval($0) })) {
-                    ForEach(UsageRefreshInterval.options, id: \.self) { seconds in
-                        Text("\(Int(seconds / 60))m").tag(seconds)
+                    ForEach(UsageRefreshInterval.choices, id: \.self) { seconds in
+                        Text(seconds == UsageRefreshInterval.auto ? "Auto" : "\(Int(seconds / 60))m").tag(seconds)
                     }
                 }
                 .pickerStyle(.segmented).labelsHidden().controlSize(.small)
-                .help("How long a usage figure stays fresh. The menu-bar readings follow the same interval.")
+                .help("Auto asks every 2 minutes while you are using AI, backs off towards an hour when nothing changes, and asks every minute when the 5-hour session is nearly full. ⌘R starts it again from 2 minutes. The menu-bar readings follow the same choice.")
             }
         }
         .accessibilityIdentifier("ai-reload-strip")

@@ -1,0 +1,51 @@
+{
+  "menusprite": 1,
+  "name": "Homebrew",
+  "icon": "mug.fill",
+  "values": [
+    {
+      "id": "outdated",
+      "name": "Outdated",
+      "command": "python3 brew.py",
+      "every": "1h",
+      "timeout": 60,
+      "parse": "json",
+      "path": "0.value"
+    }
+  ],
+  "face": {"row": [{"icon": "mug.fill", "id": "mug", "size": 13}, {"text": "{outdated}", "id": "count"}]},
+  "rules": [
+    {
+      "name": "State",
+      "cases": [
+        {
+          "when": "outdated is missing",
+          "then": [
+            {"target": "count", "hide": true},
+            {"target": "mug", "icon": "exclamationmark.triangle", "opacity": 0.6}
+          ]
+        },
+        {
+          "when": "outdated == 0",
+          "then": [{"target": "count", "hide": true}, {"target": "mug", "opacity": 0.5}]
+        }
+      ]
+    }
+  ],
+  "board": {
+    "width": 360,
+    "blocks": [
+      {"blocks": "python3 brew.py", "every": "1h", "timeout": 60},
+      {
+        "row": [
+          {"button": "Check now", "icon": "arrow.clockwise", "run": "brew update --quiet", "timeout": 300},
+          {"button": "Upgrade all", "icon": "arrow.up.circle", "run": "open -a Terminal upgrade.command"}
+        ]
+      }
+    ]
+  },
+  "files": {
+    "brew.py": "#!/usr/bin/env python3\n\"\"\"The Homebrew board: what `brew outdated` lists, as MenuSprite blocks. The face's value runs this same command\nand reads the first block's figure (path 0.value), so one `brew outdated` feeds the menu bar and the board.\"\"\"\nimport json\nimport os\nimport subprocess\n\ndone = subprocess.run([\"brew\", \"outdated\", \"--json=v2\"], capture_output=True, text=True, timeout=55,\n                      env=dict(os.environ, HOMEBREW_NO_AUTO_UPDATE=\"1\"))\nif done.returncode != 0:\n    # brew prints tap warnings first; its reason for failing comes last.\n    reason = (done.stderr.strip().splitlines() or [\"brew outdated failed\"])[-1]\n    print(json.dumps([{\"text\": \"brew outdated failed\", \"font\": \"headline\", \"icon\": \"exclamationmark.triangle\"},\n                      {\"text\": reason[:200].replace(\"{\", \"{\\u200b\"), \"font\": \"caption\", \"color\": \"gray\"}]))\n    raise SystemExit(0)\n\noutdated = json.loads(done.stdout)\nformulae, casks = outdated.get(\"formulae\", []), outdated.get(\"casks\", [])\n\n\ndef short(version):\n    return str(version).split(\",\")[0]\n\n\ndef rows(items, limit=10):\n    result = [{\"name\": item[\"name\"] + (\" (pinned)\" if item.get(\"pinned\") else \"\"),\n               \"value\": \"%s → %s\" % (short((item.get(\"installed_versions\") or [\"?\"])[-1]), short(item.get(\"current_version\", \"?\")))}\n              for item in items[:limit]]\n    if len(items) > limit:\n        result.append({\"name\": \"and %d more\" % (len(items) - limit), \"value\": \"\"})\n    return result\n\n\ntotal = len(formulae) + len(casks)\nblocks = [{\"value\": total, \"caption\": \"Upgrades waiting\",\n           \"detail\": \"%d formulae · %d apps\" % (len(formulae), len(casks)) if total else \"Everything is up to date\"}]\nif formulae:\n    blocks.append({\"card\": [{\"stats\": rows(formulae)}], \"title\": \"Formulae\"})\nif casks:\n    blocks.append({\"card\": [{\"stats\": rows(casks)}], \"title\": \"Apps\"})\nprint(json.dumps(blocks))\n",
+    "upgrade.command": "#!/bin/zsh\n# Terminal's own PATH may not include Homebrew (a fresh shell profile), so set it up here.\neval \"$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)\"\n# Opened in Terminal by the board's \"Upgrade all\" button, so a long upgrade runs where it can be watched.\nbrew update && brew upgrade\n# Tell MenuSprite it is done, so the menu bar shows the new count now. This folder's name is the sprite's id.\nfor m in menusprite ~/Applications/MenuSprite.app/Contents/Helpers/menusprite /Applications/MenuSprite.app/Contents/Helpers/menusprite; do\n  [[ -x ${commands[$m]:-$m} ]] && { \"${commands[$m]:-$m}\" refresh \"${0:A:h:t}\" >/dev/null; break }\ndone\necho\nread -sk '?Done. Press any key to close this window.'\n"
+  }
+}

@@ -21,12 +21,30 @@ final class ReleaseValidation {
         }
     }
     func check(_ name: String, _ pass: Bool) { checks.append(["name":name,"passed":pass]) }
+    static func satisfies(_ url: URL, _ requirement: String) -> Bool {
+        var code: SecStaticCode?, compiled: SecRequirement?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code,
+              SecRequirementCreateWithString(requirement as CFString, [], &compiled) == errSecSuccess, let compiled else { return false }
+        return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), compiled) == errSecSuccess
+    }
     func pause(_ seconds: Double) async throws { try await Task.sleep(for: .milliseconds(Int(seconds*1000))) }
     func run() async throws {
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
-        check("Public-preview policy compiled in", BuildFeatures.publicPreview && !BuildFeatures.privilegedPowerControls)
-        let resources = Bundle.main.resourceURL!
-        check("No privileged executable or installers", !FileManager.default.fileExists(atPath:resources.appendingPathComponent("MenuSpritePowerHelper").path) && !FileManager.default.fileExists(atPath:resources.appendingPathComponent("install-power-helper.sh").path))
+        check("Public-preview policy compiled in", BuildFeatures.publicPreview)
+        let resources = Bundle.main.resourceURL!, contents = Bundle.main.bundleURL.appendingPathComponent("Contents")
+        check("No Terminal helper installers", !FileManager.default.fileExists(atPath:resources.appendingPathComponent("MenuSpritePowerHelper").path)
+            && !FileManager.default.fileExists(atPath:resources.appendingPathComponent("install-power-helper.sh").path))
+        // The power helper ships as an SMAppService daemon: a plist naming the bundled executable, which must
+        // carry the exact signature the app's XPC connection demands.
+        let daemon = contents.appendingPathComponent("Library/LaunchDaemons/\(PowerIdentity.daemonPlistName)")
+        let plist = (try? Data(contentsOf: daemon)).flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String:Any] }
+        let program = plist?["BundleProgram"] as? String
+        check("Power helper daemon plist names the bundled helper", plist?["Label"] as? String == PowerIdentity.service
+            && program == "Contents/MacOS/MenuSpritePowerHelper" && (plist?["MachServices"] as? [String:Any])?[PowerIdentity.service] != nil
+            && (plist?["AssociatedBundleIdentifiers"] as? [String]) == ["in.prerakgada.MenuSprite"])
+        check("Bundled power helper carries the signature the app requires", program.map { Self.satisfies(Bundle.main.bundleURL.appendingPathComponent($0), PowerIdentity.helperRequirement) } ?? false)
+        // Reading the status never prompts; launching must not register anything (nobody is asked for anything).
+        check("Launching asks nothing of macOS for the helper", !PowerHelperInstall.registrationRequested)
         check("Only MenuSprite bundle identity", Bundle.main.bundleIdentifier == "in.prerakgada.MenuSprite")
         let configurations = app.monitoringStore.sprites
         check("Fresh install has six configured items", configurations.count == 6)
@@ -71,7 +89,8 @@ final class ReleaseValidation {
         try await pause(3)
         check("CPU and RAM readings in native release",app.monitoringStore.readings["cpu.usage"]?.available == true && app.monitoringStore.readings["memory.usage"]?.available == true)
         let permission = PermissionStore(); permission.opened(); try await pause(0.3)
-        check("Public helper access marked unavailable in build",permission.observation(for:.backgroundHelpers).state == .unavailableInBuild)
+        let helperAccess = permission.observation(for:.backgroundHelpers).state
+        check("Helper access states the real SMAppService status",[.enabled, .requiresApproval, .notRegistered].contains(helperAccess) && helperAccess != .unavailableInBuild)
         permission.closed()
         check("All temporary sleep assertions released",store.assertionIDs.isEmpty)
         try report()
@@ -81,7 +100,7 @@ final class ReleaseValidation {
         let result: [String:Any] = ["bundle":Bundle.main.bundlePath,"version":Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") ?? "",
                                   "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") ?? "",
                                   "executableSHA256": SHA256.hash(data: executable).map { String(format: "%02x", $0) }.joined(), "checks":checks,
-                                  "note":"Developer ID-signed public bundle; isolated monitoring configuration and UserDefaults. Real IOPM assertions. Sleep/wake and user-session callbacks simulated, no physical sleep forced, no permission request or privileged operation." ]
+                                  "note":"Developer ID-signed public bundle; isolated monitoring configuration and UserDefaults. Real IOPM assertions. Sleep/wake and user-session callbacks simulated, no physical sleep forced, no permission request, helper registration or privileged operation." ]
         try JSONSerialization.data(withJSONObject:result,options:[.prettyPrinted,.sortedKeys]).write(to:directory.appendingPathComponent("report.json"))
     }
 }

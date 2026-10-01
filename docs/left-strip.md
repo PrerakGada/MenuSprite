@@ -8,7 +8,8 @@ over those menus, so the right side keeps its room for everything else.
 ## Behaviour
 
 - **Placement is per sprite and nothing moves by default.** Right-click a sprite → *Move to left
-  side* / *Move to right side*. Stored as a list of sprite IDs in the `MenuSprite.LeftStripSprites`
+  side* / *Move to right side*, or the **Left | Right** switch in the sprite studio's header (next to
+  *In menu bar*; disabled while the sprite is hidden; applies at once and is not part of undo). Stored as a list of sprite IDs in the `MenuSprite.LeftStripSprites`
   default (`SpritePlacement`), apart from the sprite configuration. The hub icon stays on the right.
 - **Where it sits.** From just after the app's bold name (the Apple menu and the name stay visible)
   across the app's last menu, growing further if the sprites need more room, and never past the notch
@@ -16,10 +17,21 @@ over those menus, so the right side keeps its room for everything else.
   that do not fit are clipped at the right. Pure rule: `LeftStripLayout` in `SystemMonitoring`, tested.
 - **Look.** A black pill like the Island, with a dark appearance, so sprites designed for a dark bar
   (white numbers) stay readable whatever the wallpaper.
-- **Getting the menus back: point at the strip and hold ⌘.** The strip fades and lets clicks through.
-  Letting go of ⌘ brings it back, unless a menu is open. Then it waits for HIToolbox's
-  end-of-menu-tracking notification. Keyboard access (⌃F2, ⌘? Help search) needs no reveal: dropdown
-  menus open above the strip, and only the highlighted title is hidden.
+- **Pointing at the strip — a choice, `MenuSprite.LeftStripReveal`** (hub → Sprites → *Left strip*, or a strip
+  sprite's right-click → *Left strip*):
+  - **Sprites first · rest on the strip for the app's menus** (default, Prerak 29 Sep). Sprites take clicks,
+    right-clicks and drags at once, no modifier. Resting on the strip for `MenuSprite.LeftStripHoverDelay` (1 s by
+    default; 0.5–3 s in the hub card) fades it and lets clicks through to the menus; it returns when the pointer
+    leaves, unless a menu is open (⌘ over it returns it at once). Clicking or dragging a sprite stops the fade until
+    the pointer leaves. A 0.12 s dwell with ⌘ for the sprites was tried the same evening and rejected: it took two
+    hands to read a board.
+  - **Sprites stay · hold ⌘ for the app's menus** (the first design). Letting go of ⌘ brings the strip back,
+    unless a menu is open.
+  A menu opened through the faded strip keeps it faded until HIToolbox's end-of-menu-tracking notification.
+  Keyboard access (⌃F2, ⌘? Help search) needs neither: dropdowns open above the strip.
+- **Reordering: drag a strip sprite** (press, move more than 3 pt; in the ⌘-for-menus mode too). The others slide aside; on release the order is
+  written into the sprite list (`MonitoringStore.reorder`, only the strip's sprites swap places among the slots they
+  hold), and only the strip is re-arranged — right-side items are not rebuilt. The list's ⋯ → Move up/down still works.
 - **Hidden** in full-screen spaces (the panel does not join them) and whenever the menu bar is not
   reserved (auto-hide), measured from the screen's visible frame.
 - Clicks, the context menu and every board behave as on the right side: the same `SpriteMenuItem`

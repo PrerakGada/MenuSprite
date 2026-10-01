@@ -54,6 +54,7 @@ extension AccountSwitcher {
         guard let http, let credential = (try? readLiveClaude()).flatMap(ClaudeCredential.init(json:)) else { return nil }
         switch await ClaudeProfileAPI.answer(credential, http: http) {
         case .email(let email):
+            VerifiedClaudeLogins.shared.remember(email, forFingerprint: credential.tokenFingerprint)
             return .verified(tokenFingerprint: credential.tokenFingerprint, email: email)
         case .failed(let reason):
             return .unconfirmed(reason)

@@ -213,7 +213,11 @@ public actor SystemSampler {
             "memory.inactive": Reading(Double(stats.inactive_count) * page), "memory.purgeable": Reading(Double(stats.purgeable_count) * page),
             "memory.filebacked": Reading(Double(stats.external_page_count) * page)
         ]
-        if total > 0 { result["memory.usage"] = Reading(used / total * 100) }
+        if total > 0 {
+            result["memory.usage"] = Reading(used / total * 100)
+            // Activity Monitor's sense of free: what apps can take before macOS compresses or swaps.
+            result["memory.available"] = Reading(max(0, total - used))
+        }
         else { result["memory.total"] = Reading(unavailable: "Installed memory not reported") }
         if let level: Int32 = Self.sysctlValue("kern.memorystatus_vm_pressure_level", initial: 0) {
             if let label = [1: "Normal", 2: "Warning", 4: "Critical"][Int(level)] { result["memory.pressure"] = Reading(text: label) }

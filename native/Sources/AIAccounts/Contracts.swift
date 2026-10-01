@@ -177,6 +177,16 @@ public protocol UsageFetching: Sendable {
     func savedUsage(_ provider: AIProvider, email: String, force: Bool) async -> Result<UsageSnapshot, UsageError>
     /// Forget cached results for a provider, e.g. right after a switch.
     func invalidate(_ provider: AIProvider) async
+    /// ⌘R: the Auto refresh interval starts again from its shortest wait.
+    func restartAutoPacing() async
+    /// When the earliest cached figure goes stale (nil when nothing is cached), so a board that is
+    /// open can ask again at that moment even when the wait is decided by Auto.
+    func nextRefreshDate() async -> Date?
+}
+
+public extension UsageFetching {
+    func restartAutoPacing() async {}
+    func nextRefreshDate() async -> Date? { nil }
 }
 
 /// Serializes every credential mutation MenuSprite performs — token write-back and account

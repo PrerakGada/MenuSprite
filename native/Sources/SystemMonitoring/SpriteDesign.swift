@@ -265,16 +265,138 @@ public struct CommandSource: Codable, Sendable, Equatable, Hashable {
     public var output: CommandOutput
     /// For JSON output: a dotted path into the document ("data.count", "items.0.name").
     public var path: String
-    public init(command: String = "", interval: Double = 60, timeout: Double = 10, output: CommandOutput = .text, path: String = "") {
+    /// The sprite's own folder (when it carries files): the command runs there with `SPRITE_DIR` set.
+    /// Nil runs it in the home folder.
+    public var directory: String?
+    /// A value only the board shows normally runs only while the board is open; this keeps it running
+    /// whenever the sprite is enabled (a chart needs the history).
+    public var background: Bool
+    public init(command: String = "", interval: Double = 60, timeout: Double = 10, output: CommandOutput = .text, path: String = "",
+                directory: String? = nil, background: Bool = false) {
         self.command = command; self.interval = interval; self.timeout = timeout; self.output = output; self.path = path
+        self.directory = directory; self.background = background
+    }
+    enum CodingKeys: String, CodingKey { case command, interval, timeout, output, path, directory, background }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = CommandSource()
+        command = try c.decodeIfPresent(String.self, forKey: .command) ?? d.command
+        interval = try c.decodeIfPresent(Double.self, forKey: .interval) ?? d.interval
+        timeout = try c.decodeIfPresent(Double.self, forKey: .timeout) ?? d.timeout
+        output = try c.decodeIfPresent(CommandOutput.self, forKey: .output) ?? d.output
+        path = try c.decodeIfPresent(String.self, forKey: .path) ?? d.path
+        directory = try c.decodeIfPresent(String.self, forKey: .directory)
+        background = try c.decodeIfPresent(Bool.self, forKey: .background) ?? false
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(command, forKey: .command); try c.encode(interval, forKey: .interval); try c.encode(timeout, forKey: .timeout)
+        try c.encode(output, forKey: .output); try c.encode(path, forKey: .path)
+        try c.encodeIfPresent(directory, forKey: .directory)
+        if background { try c.encode(true, forKey: .background) }
     }
     public static let intervals: [Double] = [2, 5, 10, 30, 60, 300, 900, 3600]
+    /// A day: a daily `brew update` or a slow API need not be throttled by hand.
+    public static let longestInterval: Double = 86400
+    /// Far under `zsh -c`'s argument limit, and long enough for an inline heredoc script. The spec compiler
+    /// rejects a longer command rather than letting this cut it mid-script; a longer script belongs in `files`.
+    public static let maximumCommandLength = 16384
+    /// A text value keeps this many characters: a board's text, stats and copy buttons get a sentence or a
+    /// URL whole, while the 64 KiB output cap still bounds what a command can hand over.
+    public static let longestText = 500
+    /// Failures double the wait up to this, but never below the command's own interval.
+    public static let longestBackoff: Double = 600
     public var normalized: Self {
         var copy = self
-        copy.interval = min(3600, max(2, interval.isFinite ? interval : 60))
+        copy.interval = min(Self.longestInterval, max(2, interval.isFinite ? interval : 60))
         copy.timeout = min(60, max(1, timeout.isFinite ? timeout : 10))
-        copy.command = String(command.prefix(4000))
+        copy.command = String(command.prefix(Self.maximumCommandLength))
         return copy
+    }
+
+    /// How long to wait before the next run: the interval after a success; after failures, the interval
+    /// doubled per failure up to ten minutes, and never less than the interval itself, so a failing hourly or
+    /// daily command is not retried more often than it would run when it works.
+    public static func delay(interval: Double, failures: Int) -> Double {
+        guard failures > 0 else { return interval }
+        return max(interval, min(longestBackoff, interval * pow(2, Double(min(failures, 8)))))
+    }
+
+    /// What makes two values one run: the same command text, schedule, timeout and folder. Values that share
+    /// it run a single process per tick and each reads that output its own way (text, number, JSON path), so
+    /// three values reading one `curl` make one request.
+    public struct Execution: Hashable, Sendable {
+        public let command: String
+        public let interval: Double
+        public let timeout: Double
+        public let directory: String?
+        /// A source that runs this command; how it is read is left at the defaults.
+        public var source: CommandSource { CommandSource(command: command, interval: interval, timeout: timeout, directory: directory) }
+    }
+    public var execution: Execution {
+        let value = normalized
+        return Execution(command: value.command, interval: value.interval, timeout: value.timeout, directory: value.directory)
+    }
+}
+
+/// What one value read from its command's output.
+public struct CommandValue: Sendable, Equatable {
+    public var text: String?
+    public var number: Double?
+    /// Why there is no value: nothing printed, no number, not JSON, no such path.
+    public var problem: String?
+    public init(text: String? = nil, number: Double? = nil, problem: String? = nil) { self.text = text; self.number = number; self.problem = problem }
+}
+
+/// One run's output, worked out once however many values read it: the trimmed text, its first line and the
+/// JSON document are computed on first use and shared by every value of that run. Lives only as long as the
+/// run's results are being parsed; nothing parsed is kept between runs.
+public final class CommandOutputReader {
+    public let output: String
+    private lazy var trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+    private lazy var firstLine = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+    private lazy var document: Any? = {
+        documentParses += 1
+        return trimmed.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0, options: [.fragmentsAllowed]) }
+    }()
+    /// How many times the JSON was parsed: once per output, whatever the number of values reading it.
+    public private(set) var documentParses = 0
+
+    public init(_ output: String) { self.output = output }
+
+    public func value(for source: CommandSource) -> CommandValue {
+        switch source.output {
+        case .text:
+            guard !trimmed.isEmpty else { return CommandValue(problem: "Printed nothing") }
+            // A text value is the first line: the face draws one line, and a board shows `output` for the rest.
+            return CommandValue(text: String(firstLine.prefix(CommandSource.longestText)),
+                                number: Double(firstLine.trimmingCharacters(in: .whitespaces)))
+        case .number:
+            guard let number = Self.firstNumber(in: trimmed) else { return CommandValue(problem: "No number in the output") }
+            return CommandValue(number: number)
+        case .json:
+            guard let document else { return CommandValue(problem: "Output is not JSON") }
+            guard let value = Self.jsonValue(document, path: source.path) else { return CommandValue(problem: "No “\(source.path)” in the JSON") }
+            if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() { return CommandValue(number: number.doubleValue) }
+            if let string = value as? String { return CommandValue(text: String(string.prefix(CommandSource.longestText)), number: Double(string)) }
+            if let flag = value as? Bool { return CommandValue(text: flag ? "true" : "false") }
+            return CommandValue(problem: "“\(source.path)” is not a number or text")
+        }
+    }
+
+    public static func firstNumber(in text: String) -> Double? {
+        guard let range = text.range(of: #"-?\d+(?:[.,]\d+)?"#, options: .regularExpression) else { return nil }
+        return Double(text[range].replacingOccurrences(of: ",", with: "."))
+    }
+
+    public static func jsonValue(_ document: Any, path: String) -> Any? {
+        var current: Any = document
+        for key in path.split(separator: ".").map(String.init) where !key.isEmpty {
+            if let object = current as? [String: Any], let next = object[key] { current = next }
+            else if let array = current as? [Any], let index = Int(key), array.indices.contains(index) { current = array[index] }
+            else { return nil }
+        }
+        return current
     }
 }
 
@@ -292,8 +414,10 @@ public struct ValueFormat: Codable, Sendable, Equatable {
     public var bits: Bool = false
     /// Appended to a command's number ("GB", "°").
     public var suffix: String = ""
+    /// A duration (a limit's reset) written as the clock time it ends, "Thu 16:30", instead of "2h 14m".
+    public var clock: Bool = false
     public init() {}
-    enum CodingKeys: String, CodingKey { case showUnit, decimals, fahrenheit, bits, suffix }
+    enum CodingKeys: String, CodingKey { case showUnit, decimals, fahrenheit, bits, suffix, clock }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         showUnit = try c.decodeIfPresent(Bool.self, forKey: .showUnit) ?? true
@@ -301,6 +425,45 @@ public struct ValueFormat: Codable, Sendable, Equatable {
         fahrenheit = try c.decodeIfPresent(Bool.self, forKey: .fahrenheit) ?? false
         bits = try c.decodeIfPresent(Bool.self, forKey: .bits) ?? false
         suffix = try c.decodeIfPresent(String.self, forKey: .suffix) ?? ""
+        clock = try c.decodeIfPresent(Bool.self, forKey: .clock) ?? false
+    }
+}
+
+extension ValueFormat {
+    /// The clock time `end` falls on, as the Mac's locale writes it: the time alone today ("16:30" or
+    /// "4:30 PM"), with the weekday within the coming week ("Thu 16:30"), else with the date ("3 Oct 16:30",
+    /// and the year when it is not this one). For `clock` values: a limit's reset, a timer's end.
+    public static func clockTime(_ end: Date, now: Date = Date(), calendar: Calendar = .current, locale: Locale = .current) -> String {
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: end)).day ?? 0
+        // "j" is the locale's (and the user's) 12- or 24-hour clock. The day and the time are written apart and
+        // joined by a space, because the combined patterns add words ("3 Oct at 16:30") a menu bar has no room for.
+        let time = ClockFormatters.formatter("jmm", calendar: calendar, locale: locale).string(from: end)
+        let day: String? = switch days {
+        case 0: nil
+        case 1...6: "EEE"
+        default: calendar.component(.year, from: end) == calendar.component(.year, from: now) ? "dMMM" : "dMMMy"
+        }
+        guard let day else { return time }
+        return ClockFormatters.formatter(day, calendar: calendar, locale: locale).string(from: end) + " " + time
+    }
+}
+
+/// Date formatters are costly to make and a clock value is drawn on every sample, so one is kept per pattern,
+/// locale and time zone. Formatting with a shared `DateFormatter` is thread-safe; only the table is locked.
+private enum ClockFormatters {
+    nonisolated(unsafe) private static var table: [String: DateFormatter] = [:]
+    private static let lock = NSLock()
+
+    static func formatter(_ template: String, calendar: Calendar, locale: Locale) -> DateFormatter {
+        let key = "\(template)|\(locale.identifier)|\(calendar.timeZone.identifier)|\(calendar.identifier)"
+        return lock.withLock {
+            if let made = table[key] { return made }
+            let formatter = DateFormatter()
+            formatter.locale = locale; formatter.calendar = calendar; formatter.timeZone = calendar.timeZone
+            formatter.setLocalizedDateFormatFromTemplate(template)
+            table[key] = formatter
+            return formatter
+        }
     }
 }
 

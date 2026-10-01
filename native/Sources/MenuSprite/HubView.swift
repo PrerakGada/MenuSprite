@@ -81,7 +81,7 @@ struct HubView: View {
     private var footer: some View {
         HStack(spacing: 6) {
             footerButton("Sprites", "slider.horizontal.3", "Monitoring & Sprites", id: "hub-settings", actions.openSprites)
-            footerButton(BuildFeatures.publicPreview ? "Awake" : "Controls", "bolt.badge.clock", BuildFeatures.powerPageTitle,
+            footerButton("Controls", "bolt.badge.clock", BuildFeatures.powerPageTitle,
                          id: "hub-open-power-controls", actions.openPowerControls)
             footerButton("Island", "capsule.fill", "Dynamic Island settings", id: "hub-open-island", actions.openIsland)
             footerButton("Access", "lock.shield", "Permissions & Access", id: "hub-open-permissions", actions.openPermissions)

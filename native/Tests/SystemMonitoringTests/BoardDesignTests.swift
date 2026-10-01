@@ -50,7 +50,7 @@ import Testing
     --Nested | color=#ff9f0a font=Menlo
     """)
     #expect(lines.count == 4)
-    #expect(lines[0].text == "Build passing" && lines[0].color == "30D158" && lines[0].symbol == "checkmark.circle")
+    #expect(lines[0].text == "Build passing" && lines[0].color == "green" && lines[0].symbol == "checkmark.circle")
     #expect(lines[1].isDivider)
     #expect(lines[2].href == "https://github.com" && lines[2].bash == "gh pr view --web" && lines[2].size == 12)
     #expect(lines[3].depth == 1 && lines[3].text == "Nested" && lines[3].color == "FF9F0A" && lines[3].monospaced)

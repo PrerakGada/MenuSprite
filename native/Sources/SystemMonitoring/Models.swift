@@ -190,6 +190,9 @@ public struct SpriteConfiguration: Identifiable, Codable, Sendable, Equatable {
         get { spriteDesign }
         set { spriteDesign = newValue }
     }
+    /// The gallery template this sprite was made from, which "Reset to template" goes back to.
+    /// Nil for a sprite made from scratch or saved before the gallery existed.
+    public var templateID: String?
     public init(name: String = "My sprite", symbol: String = "gauge.with.dots.needle.50percent",
                 metricIDs: [String] = ["cpu.usage"], enabled: Bool = true, showInMenuBar: Bool = true) {
         id = UUID(); self.name = name; self.symbol = symbol; self.metricIDs = metricIDs
@@ -224,21 +227,13 @@ public struct SpriteConfiguration: Identifiable, Codable, Sendable, Equatable {
         if colorHex != "auto" && (colorHex.count != 6 || UInt32(colorHex, radix: 16) == nil) { colorHex = "auto" }
         if iconColorHex != "text" && iconColorHex != "auto" && (iconColorHex.count != 6 || UInt32(iconColorHex, radix: 16) == nil) { iconColorHex = "text" }
     }
+    /// What a new Mac starts with: the gallery's starter templates, as settings the store converts on load.
     public static var initial: [Self] {
-        [("CPU", "cpu", ["cpu.usage"]), ("RAM", "memorychip", ["memory.usage"]),
-         ("Power", "bolt", ["sensor.PSTR"]), ("Network", "network", ["network.upload", "network.download"]),
-         ("Fan & CPU temperature", "fan", ["sensor.fanSpeed", "sensor.cpuTemperature"])].map { name, symbol, metrics in
-            var item = Self(name: name, symbol: symbol, metricIDs: metrics)
-            item.showIcon = false; item.bold = false; item.fontSize = metrics.count == 1 ? 14 : 12
-            if metrics.contains("sensor.fanSpeed") {
-                item.symbol = "fan.fill"; item.showIcon = true; item.iconColorHex = "79BFFA"
+        SpriteTemplates.starterIDs.compactMap { id in
+            SpriteTemplates.template(id).map { template in
+                var item = template.recipe; item.id = UUID(); item.templateID = id; return item
             }
-            if metrics.contains("network.upload") { item.colorRule = .networkDirection }
-            if metrics == ["memory.usage"] { item.colorRule = .memoryPressure }
-            if metrics == ["sensor.PSTR"] { item.colorRule = .powerDraw }
-            item.layout = metrics.count == 1 ? .stacked : .twoRows
-            return item
-        } + [battery]
+        }
     }
 
     /// The battery item: the drawn glyph beside the charge, with the charge-control

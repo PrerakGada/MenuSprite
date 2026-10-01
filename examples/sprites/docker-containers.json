@@ -1,0 +1,49 @@
+{
+  "menusprite": 1,
+  "name": "Docker",
+  "icon": "shippingbox.fill",
+  "values": [
+    {
+      "id": "running",
+      "name": "Running",
+      "command": "setopt pipefail; docker ps -q | wc -l",
+      "every": "30s",
+      "timeout": 10,
+      "parse": "number"
+    }
+  ],
+  "face": {"row": [{"icon": "shippingbox.fill", "id": "box", "size": 13}, {"text": "{running}", "id": "count"}]},
+  "rules": [
+    {
+      "name": "State",
+      "cases": [
+        {
+          "when": "running is missing",
+          "then": [
+            {"target": "count", "hide": true},
+            {"target": "box", "icon": "exclamationmark.triangle", "opacity": 0.6}
+          ]
+        },
+        {
+          "when": "running == 0",
+          "then": [{"target": "count", "hide": true}, {"target": "box", "opacity": 0.45}]
+        }
+      ]
+    }
+  ],
+  "board": {
+    "width": 380,
+    "blocks": [
+      {"blocks": "python3 docker.py", "every": "15s", "timeout": 25},
+      {
+        "row": [
+          {"button": "Docker Desktop", "icon": "macwindow", "app": "Docker"},
+          {"button": "Refresh", "icon": "arrow.clockwise", "refresh": true}
+        ]
+      }
+    ]
+  },
+  "files": {
+    "docker.py": "#!/usr/bin/env python3\n\"\"\"The Docker board: a switch per container (starts or stops it) and what Docker is holding, as MenuSprite blocks.\"\"\"\nimport json\nimport shlex\nimport subprocess\n\nSHOWN = 12\n\n\ndef docker(*args):\n    return subprocess.run([\"docker\", *args], capture_output=True, text=True, timeout=20)\n\n\ndef plain(text):\n    # Board text reads {word} as one of the sprite's values; a container name never means one.\n    return text.replace(\"{\", \"{\\u200b\")\n\n\nlisted = docker(\"ps\", \"-a\", \"--format\", \"{{.Names}}\\t{{.Image}}\\t{{.State}}\\t{{.Status}}\\t{{.Ports}}\")\nif listed.returncode != 0:\n    reason = (listed.stderr.strip().splitlines() or [\"docker ps failed\"])[-1]\n    print(json.dumps([\n        {\"text\": \"Docker is not running\", \"font\": \"headline\", \"icon\": \"exclamationmark.triangle\"},\n        {\"text\": plain(reason[:200]), \"font\": \"caption\", \"color\": \"gray\"},\n    ]))\n    raise SystemExit(0)\n\ncontainers = []\nfor line in listed.stdout.splitlines():\n    name, image, state, status, ports = (line.split(\"\\t\") + [\"\"] * 5)[:5]\n    containers.append({\"name\": name, \"image\": image, \"running\": state == \"running\", \"status\": status, \"ports\": ports})\ncontainers.sort(key=lambda c: (not c[\"running\"], c[\"name\"]))\nrunning = sum(c[\"running\"] for c in containers)\nimages = len(set(docker(\"images\", \"-q\").stdout.split()))\n\n\ndef row(c):\n    port = c[\"ports\"].split(\",\")[0].split(\"->\")[0].rsplit(\":\", 1)[-1] if c[\"running\"] and c[\"ports\"] else \"\"\n    detail = \" · \".join(part for part in (c[\"image\"], c[\"status\"], \"port \" + port if port else \"\") if part)\n    return {\"row\": [\n        {\"stack\": [\n            {\"text\": plain(c[\"name\"]), \"lines\": 1, \"truncate\": \"middle\"},\n            {\"text\": plain(detail), \"font\": \"caption\", \"color\": \"gray\", \"lines\": 1},\n        ], \"spacing\": 1},\n        {\"toggle\": \"\", \"value\": c[\"running\"], \"color\": \"green\", \"fit\": True,\n         \"on\": \"docker start \" + shlex.quote(c[\"name\"]), \"off\": \"docker stop \" + shlex.quote(c[\"name\"])},\n    ]}\n\n\nrows = [row(c) for c in containers[:SHOWN]]\nif len(containers) > SHOWN:\n    rows.append({\"text\": \"and %d more in Docker Desktop\" % (len(containers) - SHOWN), \"font\": \"caption\", \"color\": \"gray\"})\nprint(json.dumps([\n    {\"row\": [{\"value\": running, \"caption\": \"Running\"},\n             {\"value\": len(containers) - running, \"caption\": \"Stopped\"},\n             {\"value\": images, \"caption\": \"Images\"}]},\n    {\"card\": rows or [{\"text\": \"No containers yet.\", \"font\": \"caption\", \"color\": \"gray\"}], \"title\": \"Containers\"},\n]))\n"
+  }
+}

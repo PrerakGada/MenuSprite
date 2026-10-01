@@ -46,7 +46,7 @@ public enum DesignRenderer {
                               overrides precomputed: [String: NodeOverride]? = nil) -> Output {
         let overrides = precomputed ?? SpriteRules.evaluate(design, values: values)
         let height = max(18, height)
-        guard var root = resolve(design.root, design: design, values: values, overrides: overrides, inherited: "auto") else {
+        guard var root = resolve(design.root, design: design, values: values, overrides: overrides, inherited: "auto", fade: 1) else {
             let empty = NSImage(size: NSSize(width: 6, height: height))
             return Output(image: empty, size: empty.size, placed: [], slotWidths: [:], signature: "", accessibilityText: "", isTemplate: true)
         }
@@ -79,14 +79,17 @@ public enum DesignRenderer {
 
     // MARK: Resolve
 
+    /// `fade` is the product of the enclosing rows' and columns' opacity: a container draws nothing itself,
+    /// so its opacity reaches the bar through its pieces (a rule dimming the whole sprite dims all of it).
     private static func resolve(_ node: DesignNode, design: SpriteDesign, values: DesignValues,
-                                overrides: [String: NodeOverride], inherited: String) -> Resolved? {
+                                overrides: [String: NodeOverride], inherited: String, fade: Double) -> Resolved? {
         let override = overrides[node.id]
         if override?.hidden ?? node.style.hidden { return nil }
         let own = override?.color ?? node.style.color
         let color = own == "inherit" ? inherited : own
+        let opacity = min(1, max(0.05, override?.opacity ?? node.style.opacity)) * fade
         let children = node.kind.isContainer
-            ? node.children.compactMap { resolve($0, design: design, values: values, overrides: overrides, inherited: color) } : []
+            ? node.children.compactMap { resolve($0, design: design, values: values, overrides: overrides, inherited: color, fade: opacity) } : []
         if node.kind.isContainer && children.isEmpty { return nil }
         let segments = override?.text ?? node.segments
         let text = segments.map { segment -> String in
@@ -110,7 +113,7 @@ public enum DesignRenderer {
         }
         let defaultSize: Double = switch node.kind { case .icon: 14; case .bar: 9; default: 12 }
         return Resolved(node: node, children: children, text: node.kind == .text ? text : "", segmentWidths: templateWidth,
-                        color: color, opacity: min(1, max(0.05, override?.opacity ?? node.style.opacity)),
+                        color: color, opacity: opacity,
                         symbol: override?.symbol ?? node.symbol, level: level,
                         size: min(40, max(4, node.style.size ?? defaultSize)))
     }
@@ -347,11 +350,8 @@ public enum DesignRenderer {
     // MARK: Draw
 
     public static func ink(for hex: String, template: Bool) -> NSColor {
-        guard hex != "auto", hex != "inherit", let rgb = UInt32(hex, radix: 16), hex.count == 6 else {
-            return template ? .black : .labelColor
-        }
-        return NSColor(red: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
-                       blue: CGFloat(rgb & 255) / 255, alpha: 1)
+        guard hex != "auto", hex != "inherit", let color = SpriteColors.color(hex) else { return template ? .black : .labelColor }
+        return color
     }
 
     private static func draw(_ item: Resolved, in rect: CGRect, template: Bool, parentInk: NSColor?, battery: BatteryGlyph?) {
@@ -378,18 +378,34 @@ public enum DesignRenderer {
             CTLineDraw(line, context)
             context.restoreGState()
         case .icon:
+            // Drawn in monochrome and then filled with the colour where it has ink: a one-colour palette
+            // would paint every layer alike, so a ".fill" symbol's inner mark (the tick in
+            // checkmark.circle.fill) would vanish into a solid disc instead of staying cut out.
             guard let symbol = (NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
                 ?? NSImage(systemSymbolName: "questionmark.square.dashed", accessibilityDescription: nil))?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color])) else { return }
+                .withSymbolConfiguration(.preferringMonochrome()),
+                  let context = NSGraphicsContext.current?.cgContext else { return }
             let scale = min(rect.width / max(1, symbol.size.width), rect.height / max(1, symbol.size.height))
             let size = CGSize(width: symbol.size.width * scale, height: symbol.size.height * scale)
-            symbol.draw(in: CGRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height))
+            let target = CGRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height)
+            context.saveGState()
+            context.beginTransparencyLayer(in: target, auxiliaryInfo: nil)
+            symbol.draw(in: target)
+            context.setBlendMode(.sourceIn)
+            context.setFillColor(color.cgColor)
+            context.fill(target)
+            context.endTransparencyLayer()
+            context.restoreGState()
         case .battery:
-            guard var glyph = battery else { return }
+            guard var glyph = battery, let context = NSGraphicsContext.current?.cgContext else { return }
             glyph.percentInside = glyph.percentInside && item.node.style.chargeInside
-            glyph.draw(in: rect, ink: color)
+            // The glyph sets its own outline alpha, so the opacity fades the whole drawing instead.
+            context.saveGState()
+            context.setAlpha(item.opacity)
+            glyph.draw(in: rect, ink: color.withAlphaComponent(1))
+            context.restoreGState()
         case .bar:
-            let outline = (parentInk ?? color).withAlphaComponent(0.45)
+            let outline = (parentInk ?? color).withAlphaComponent(0.45 * item.opacity)
             let shell = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 1, yRadius: 1)
             outline.setStroke(); shell.lineWidth = 1; shell.stroke()
             let inner = rect.insetBy(dx: 1.5, dy: 1.5)

@@ -474,7 +474,8 @@ public struct AccountSwitcher: Sendable {
     /// file's profile. After Claude Code rotates tokens only the profile still names the account.
     /// Best guess for display. Filing a login under an email goes through `claudeOwner` instead.
     func claudeIdentity(of live: ClaudeCredential, config: SwitcherConfig, stateAccountJSON: String?) -> String? {
-        exactSavedOwner(of: live, config: config) ?? stateAccountJSON.flatMap(ClaudeState.email(inOAuthAccount:))
+        exactSavedOwner(of: live, config: config) ?? VerifiedClaudeLogins.shared.email(forFingerprint: live.tokenFingerprint)
+            ?? stateAccountJSON.flatMap(ClaudeState.email(inOAuthAccount:))
     }
 
     enum ClaudeOwner: Sendable, Equatable { case account(String), expired, unknown }

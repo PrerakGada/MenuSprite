@@ -138,6 +138,23 @@ suffix colors together, white bold usage numbers and restored normal-weight othe
   lifetime). The network is used at most once per **refresh interval** per login — 5
   minutes unless changed; shorter sprite intervals only re-render cached values and the
   reset countdowns.
+- **Which account the live login is** (29 September): `UsageService` names the CLI's login by an
+  identical saved copy first (token fingerprint, the switcher's rule) and by `~/.claude.json` only when
+  no copy matches (Claude Code rotated its tokens) by Anthropic's `oauth/profile` answer, cached by
+  token fingerprint in `VerifiedClaudeLogins` and shared with the board's Active marker. The state
+  file is the last resort only: the Claude desktop app (prerak) writes its own account there while
+  the CLI's keychain login is hemali's, so it once made both rows read hemali's usage.
+- **Auto is the default refresh interval** (29 September; `UsageAutoPacer`, saved as
+  `MenuSprite.AIUsageRefreshSeconds` = 0). The wait after each answer is decided from the answers:
+  2 → 5 → 10 → 15 → 30 → 60 minutes, one rung up for every answer identical to the last; a jump of
+  2+ points in any limit, a window reset or a different account goes back to 2 minutes; a 1-point
+  drift holds. While the 5-hour session is ≥ 95% the waits start at 1 minute (five quiet answers,
+  then 2, then 5) so auto-switching sees the limit in time; ≥ 90% starts at 2 minutes. If the session
+  resets before the planned check, the check moves to 5 s after the reset. Never under 30 s. **⌘R
+  (board, hub, refresh button) restarts the ladder at 2 minutes.** The menu-bar readings and the
+  board share it, because the pacing lives in `UsageService`; the open board asks the service when
+  the next check is due (`nextRefreshDate`). A 429 cooldown still overrides everything. Fixed
+  choices (1–30 m) behave as before; an interval saved before this stays as chosen.
 - **The refresh interval is chosen in the AI Accounts board** (15 September): 1, 2, 5, 10,
   15 or 30 minutes, saved as `MenuSprite.AIUsageRefreshSeconds`. The board and the
   menu-bar readings follow the same value, and a change applies to the snapshot already

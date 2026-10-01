@@ -30,11 +30,49 @@ final class SpriteContextMenu: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
         if config.isBatteryItem { addBatterySection(to: menu) }
+        if config.opensFanBoard { addFanSection(to: menu) }
         add(menu, "Configure sprite…", #selector(configureSprite))
         add(menu, config.enabled ? "Pause readings" : "Resume readings", #selector(togglePaused))
         add(menu, SpritePlacement.shared.isLeft(config.id) ? "Move to right side" : "Move to left side", #selector(togglePlacement))
+        if SpritePlacement.shared.isLeft(config.id) {
+            let choices = NSMenu()
+            for reveal in SpritePlacement.Reveal.allCases {
+                let item = NSMenuItem(title: reveal.title, action: #selector(chooseReveal(_:)), keyEquivalent: "")
+                item.target = self; item.representedObject = reveal.rawValue
+                item.state = SpritePlacement.shared.reveal == reveal ? .on : .off
+                choices.addItem(item)
+            }
+            let holder = NSMenuItem(title: "Left strip", action: nil, keyEquivalent: "")
+            holder.submenu = choices
+            menu.addItem(holder)
+        }
         add(menu, "Hide from menu bar", #selector(hideItem))
         return menu
+    }
+
+    /// The fan presets straight from right-click, without opening the board.
+    private func addFanSection(to menu: NSMenu) {
+        add(menu, power.fanStatus, nil)
+        let choices: [(String, FanTarget)] = [("Automatic", .automatic)]
+            + FanTarget.presets.map { ($0 == 100 ? "Full blast" : "Fans at \($0)%", .percent($0)) }
+        let enabled = power.helperInstalled
+        for (title, target) in choices {
+            guard let item = add(menu, title, #selector(chooseFans(_:))) else { continue }
+            item.representedObject = target.percent ?? 0
+            item.state = power.fanTarget == target ? .on : .off
+            item.isEnabled = enabled
+        }
+        if let percent = power.fanTarget.percent, !FanTarget.presets.contains(percent) {
+            add(menu, "Custom · \(percent)%", nil)?.state = .on
+        }
+        if let action = power.helperActionTitle, !power.helperInstalled || power.helperOutdated {
+            add(menu, action, #selector(enableHelper))
+        }
+        menu.addItem(.separator())
+    }
+    @objc private func chooseFans(_ sender: NSMenuItem) {
+        let percent = sender.representedObject as? Int ?? 0
+        power.setFans(percent == 0 ? .automatic : .percent(percent))
     }
 
     private func addBatterySection(to menu: NSMenu) {
@@ -47,15 +85,15 @@ final class SpriteContextMenu: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         add(menu, "Low Power Mode", #selector(toggleLowPower))?.state = power.lowPowerEnabled ? .on : .off
         if power.helperOutdated {
-            add(menu, "Power helper needs reinstalling for this", nil)
-            add(menu, "Copy helper install command", #selector(copyInstall))
+            add(menu, "Power helper needs updating for this", nil)
+            add(menu, power.helperActionTitle ?? "Update power helper…", #selector(enableHelper))
         }
         menu.addItem(.separator())
 
         if let reason = power.batteryRequestReason {
             add(menu, reason, nil)
-            if !power.helperInstalled && BuildFeatures.privilegedPowerControls {
-                add(menu, "Copy helper install command", #selector(copyInstall))
+            if !power.helperInstalled, let action = power.helperActionTitle {
+                add(menu, action, #selector(enableHelper))
             }
             // A charge limit and a discharge need different firmware. When only
             // the adapter switch exists, still offer the control that works.
@@ -115,6 +153,9 @@ final class SpriteContextMenu: NSObject, NSMenuDelegate {
         if power.helperInstalled {
             let led = add(menu, "MagSafe light shows charge state", #selector(toggleLED))
             led?.state = power.ledControl ? .on : .off
+        } else if let action = power.helperActionTitle {
+            // macOS takes 80–100% in 5% steps on its own; any other limit and discharge need the helper.
+            add(menu, action, #selector(enableHelper))
         }
     }
 
@@ -169,12 +210,16 @@ final class SpriteContextMenu: NSObject, NSMenuDelegate {
         // may be unable to hold; hand control back to macOS instead.
         if power.snapshot.mode == .discharge { power.stopBattery() } else { power.battery(.discharge) }
     }
-    @objc private func copyInstall() { power.copyInstallCommand() }
+    @objc private func enableHelper() { power.enableHelper() }
     @objc private func toggleLowPower() { power.toggleLowPower() }
     @objc private func showDashboard() { openDashboard() }
     @objc private func configureSprite() { configure() }
     @objc private func togglePaused() { store.setEnabled(config.id, !config.enabled) }
     @objc private func hideItem() { store.setMenuBar(config.id, false) }
+    @objc private func chooseReveal(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let reveal = SpritePlacement.Reveal(rawValue: raw) else { return }
+        SpritePlacement.shared.reveal = reveal
+    }
     /// Deferred: moving rebuilds the sprite's item, and this runs while its menu is still unwinding.
     @objc private func togglePlacement() {
         let id = config.id

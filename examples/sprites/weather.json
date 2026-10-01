@@ -1,0 +1,74 @@
+{
+  "menusprite": 1,
+  "name": "Weather",
+  "icon": "cloud.sun.fill",
+  "values": [
+    {
+      "id": "temp",
+      "name": "Temperature",
+      "command": "./now.sh",
+      "every": "30m",
+      "timeout": 15,
+      "parse": "json",
+      "path": "current_condition.0.temp_C",
+      "suffix": "°"
+    },
+    {
+      "id": "sky",
+      "name": "Sky",
+      "command": "./now.sh",
+      "every": "30m",
+      "timeout": 15,
+      "parse": "json",
+      "path": "current_condition.0.weatherDesc.0.value"
+    }
+  ],
+  "face": {"row": [{"icon": "sun.max.fill", "id": "skyIcon", "size": 13}, {"text": "{temp}", "id": "tempText"}]},
+  "rules": [
+    {
+      "name": "Sky icon",
+      "cases": [
+        {"when": "sky contains thunder", "then": [{"target": "skyIcon", "icon": "cloud.bolt.rain.fill"}]},
+        {
+          "when": "sky contains snow or sky contains sleet or sky contains blizzard",
+          "then": [{"target": "skyIcon", "icon": "cloud.snow.fill"}]
+        },
+        {
+          "when": "sky contains rain or sky contains drizzle or sky contains shower",
+          "then": [{"target": "skyIcon", "icon": "cloud.rain.fill"}]
+        },
+        {
+          "when": "sky contains fog or sky contains mist or sky contains haze",
+          "then": [{"target": "skyIcon", "icon": "cloud.fog.fill"}]
+        },
+        {"when": "sky contains partly", "then": [{"target": "skyIcon", "icon": "cloud.sun.fill"}]},
+        {
+          "when": "sky contains overcast or sky contains cloudy",
+          "then": [{"target": "skyIcon", "icon": "cloud.fill"}]
+        }
+      ]
+    },
+    {
+      "name": "Offline",
+      "when": "temp is missing",
+      "then": [{"target": "tempText", "hide": true}, {"target": "skyIcon", "icon": "icloud.slash", "opacity": 0.6}]
+    }
+  ],
+  "board": {
+    "width": 380,
+    "blocks": [
+      {"blocks": "python3 weather.py", "every": "30m", "timeout": 25},
+      {
+        "row": [
+          {"button": "Change place", "icon": "mappin.and.ellipse", "run": "open -t place.txt"},
+          {"button": "wttr.in", "icon": "safari", "open": "https://wttr.in"}
+        ]
+      }
+    ]
+  },
+  "files": {
+    "now.sh": "#!/bin/zsh -f\n# Today's weather from wttr.in as compact JSON (format=j2, about 3 KB). Both face values run this same command,\n# so one request feeds them both; each reads its own path.\nplace=$(head -n 1 \"$SPRITE_DIR/place.txt\" 2>/dev/null | tr ' ' '+')\ncurl -fsS --max-time 12 \"https://wttr.in/${place}?format=j2\"\n",
+    "place.txt": "\n",
+    "weather.py": "#!/usr/bin/env python3\n\"\"\"The weather board from wttr.in: now, the next 24 hours as a chart, and the next days with an icon each, as MenuSprite blocks.\"\"\"\nimport json\nimport os\nimport subprocess\nfrom datetime import datetime\n\nHERE = os.path.dirname(os.path.abspath(__file__))\nwith open(os.path.join(HERE, \"place.txt\")) as file:\n    place = file.readline().strip().replace(\" \", \"+\")\n\ndone = subprocess.run([\"curl\", \"-fsS\", \"--max-time\", \"15\", \"https://wttr.in/%s?format=j1\" % place],\n                      capture_output=True, text=True, timeout=20)\nif done.returncode != 0:\n    print(json.dumps([{\"text\": \"wttr.in did not answer\", \"font\": \"headline\", \"icon\": \"icloud.slash\"},\n                      {\"text\": done.stderr.strip()[:160].replace(\"{\", \"{\\u200b\"), \"font\": \"caption\", \"color\": \"gray\"}]))\n    raise SystemExit(0)\n\n\ndef symbol(sky):\n    \"\"\"An SF Symbol for wttr.in's description of the sky.\"\"\"\n    sky = sky.lower()\n    for words, name in (((\"thunder\",), \"cloud.bolt.rain.fill\"), ((\"snow\", \"sleet\", \"blizzard\", \"ice\"), \"cloud.snow.fill\"),\n                        ((\"rain\", \"drizzle\", \"shower\"), \"cloud.rain.fill\"), ((\"fog\", \"mist\", \"haze\"), \"cloud.fog.fill\"),\n                        ((\"partly\",), \"cloud.sun.fill\"), ((\"cloud\", \"overcast\"), \"cloud.fill\")):\n        if any(word in sky for word in words):\n            return name\n    return \"sun.max.fill\"\n\n\ndata = json.loads(done.stdout)\nnow, area = data[\"current_condition\"][0], data[\"nearest_area\"][0]\nhours = [(datetime.strptime(day[\"date\"], \"%Y-%m-%d\").replace(hour=int(h[\"time\"]) // 100), h)\n         for day in data[\"weather\"] for h in day[\"hourly\"]]\nupcoming = [h for when, h in hours if when >= datetime.now().replace(minute=0, second=0, microsecond=0)][:8]\ndays = []\nfor index, day in enumerate(data[\"weather\"]):\n    sky = day[\"hourly\"][4][\"weatherDesc\"][0][\"value\"].strip()\n    label = [\"Today\", \"Tomorrow\"][index] if index < 2 else datetime.strptime(day[\"date\"], \"%Y-%m-%d\").strftime(\"%A\")\n    days.append({\"row\": [{\"text\": label, \"icon\": symbol(sky), \"fit\": True},\n                         {\"text\": \"%s° – %s° · %s\" % (day[\"mintempC\"], day[\"maxtempC\"], sky), \"color\": \"gray\", \"lines\": 1}]})\n\nprint(json.dumps([\n    {\"row\": [\n        {\"value\": now[\"temp_C\"] + \"°\", \"caption\": area[\"areaName\"][0][\"value\"], \"font\": \"huge\",\n         \"detail\": now[\"weatherDesc\"][0][\"value\"]},\n        {\"stats\": [\n            {\"name\": \"Feels like\", \"value\": now[\"FeelsLikeC\"] + \"°\"},\n            {\"name\": \"Humidity\", \"value\": now[\"humidity\"] + \"%\"},\n            {\"name\": \"Wind\", \"value\": \"%s km/h %s\" % (now[\"windspeedKmph\"], now[\"winddir16Point\"])},\n            {\"name\": \"UV index\", \"value\": now[\"uvIndex\"]},\n        ]},\n    ]},\n    {\"card\": [\n        {\"chart\": [float(h[\"tempC\"]) for h in upcoming], \"caption\": \"Temperature, every 3 hours\", \"height\": 44, \"color\": \"orange\"},\n        {\"text\": \"Rain chance up to %d%%\" % max(int(h[\"chanceofrain\"]) for h in upcoming), \"font\": \"caption\", \"color\": \"gray\"},\n    ], \"title\": \"Next 24 hours\"},\n    {\"card\": days, \"title\": \"Next days\"},\n]))\n"
+  }
+}

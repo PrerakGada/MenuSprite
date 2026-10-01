@@ -13,11 +13,16 @@ public protocol PowerHardware: AnyObject {
     func batteryFlow() -> (charging: Bool, amperage: Int)?
     func readLED() -> MagSafeLED?
     func writeLED(_ value: MagSafeLED) throws
+    func fans() -> [FanState]
+    /// Holds one fan at `rpm`, or hands it back to macOS when nil.
+    func writeFan(_ index: Int, rpm: Double?) throws
 }
 public extension PowerHardware {
     func batteryFlow() -> (charging: Bool, amperage: Int)? { nil }
     func readLED() -> MagSafeLED? { nil }
     func writeLED(_ value: MagSafeLED) throws { throw PowerFailure("MagSafe LED control is unavailable") }
+    func fans() -> [FanState] { [] }
+    func writeFan(_ index: Int, rpm: Double?) throws { throw PowerFailure("Fan control is unavailable") }
 }
 public final class BatteryHardware: PowerHardware {
     private var connection: io_connect_t = 0
@@ -49,6 +54,7 @@ public final class BatteryHardware: PowerHardware {
     struct KeyInfo: Equatable {
         let size: Int
         let attributes: UInt8
+        var type = ""
         var writable: Bool { attributes & 0x40 != 0 }
     }
     private var infos: [String: KeyInfo?] = [:]
@@ -57,7 +63,9 @@ public final class BatteryHardware: PowerHardware {
         var result: KeyInfo?
         if let data = packet(9,key) {
             let size = (0..<4).reduce(0) { $0 | Int(data[28+$1]) << ($1*8) }
-            if (1...32).contains(size) { result = KeyInfo(size: size, attributes: data[36]) }
+            let code = (0..<4).reduce(UInt32(0)) { $0 | UInt32(data[32+$1]) << ($1*8) }
+            let type = String(bytes: [24,16,8,0].map { UInt8(truncatingIfNeeded: code >> $0) }, encoding: .ascii) ?? ""
+            if (1...32).contains(size) { result = KeyInfo(size: size, attributes: data[36], type: type) }
         }
         infos[key] = result
         return result
@@ -154,5 +162,53 @@ public final class BatteryHardware: PowerHardware {
         guard bytes == allowed || bytes == inhibited else { throw PowerFailure("Unrecognized firmware control state; refusing to write") }
         guard info(key)?.writable == true else { throw PowerFailure("Firmware publishes \(key) as read-only; refusing to write") }
         guard packet(6,key,bytes:bytes,size:bytes.count) != nil, read(key) == bytes else { throw PowerFailure("Firmware did not confirm \(key); control stopped") }
+    }
+
+    // MARK: Fans
+    // Apple Silicon publishes per fan: F<n>Ac actual, F<n>Mn/Mx limits and F<n>Tg target (little-endian
+    // floats), and a one-byte mode key — `F<n>md` on recent firmware, `F<n>Md` before — where 1 holds
+    // the target and 0 hands the fan back to macOS. Measured on Nebula (M5 Max, macOS 27.0.1): both
+    // fans' mode and target keys carry the write bit; no `Ftst` unlock key exists.
+    private func float(_ key: String) -> Double? {
+        guard info(key)?.type == "flt ", let b = read(key), b.count == 4 else { return nil }
+        let value = Double(Float(bitPattern: (0..<4).reduce(UInt32(0)) { $0 | UInt32(b[$1]) << ($1 * 8) }))
+        return value.isFinite ? value : nil
+    }
+    private func fanModeKey(_ index: Int) -> String? {
+        ["F\(index)md", "F\(index)Md"].first { info($0)?.size == 1 }
+    }
+    public func fans() -> [FanState] {
+        guard let count = read("FNum")?.first else { return [] }
+        return (0..<min(Int(count), 10)).compactMap { i in
+            guard let rpm = float("F\(i)Ac"), let low = float("F\(i)Mn"), let high = float("F\(i)Mx"), high > low, low >= 0 else { return nil }
+            let mode = fanModeKey(i)
+            let manual = mode.flatMap { read($0) }.map { $0 != [0] } ?? false
+            let controllable = mode.map { info($0)?.writable == true } == true
+                && info("F\(i)Tg").map { $0.writable && $0.type == "flt " && $0.size == 4 } == true
+            return FanState(index: i, rpm: max(0, rpm), minimum: low, maximum: high, target: float("F\(i)Tg"),
+                            manual: manual, controllable: controllable)
+        }
+    }
+    /// Only the fan mode and target keys, only a speed inside the fan's own limits, read back after.
+    public func writeFan(_ index: Int, rpm: Double?) throws {
+        guard geteuid() == 0 else { throw PowerFailure("Administrator helper is required") }
+        guard let fan = fans().first(where: { $0.index == index }), fan.controllable, let mode = fanModeKey(index) else {
+            throw PowerFailure("Fan \(index + 1) publishes no writable control")
+        }
+        guard let rpm else {
+            guard packet(6, mode, bytes: [0], size: 1) != nil, read(mode) == [0] else { throw PowerFailure("Firmware did not hand fan \(index + 1) back to macOS") }
+            return
+        }
+        let value = rpm.clamped(fan.minimum, fan.maximum)
+        let bits = Float(value).bitPattern
+        let bytes = (0..<4).map { UInt8(truncatingIfNeeded: bits >> ($0 * 8)) }
+        // Target before mode: the firmware keeps the last manual target and runs the fan at it the
+        // moment the mode flips, so writing the mode first briefly spins to a stale speed.
+        // The target reads back about a second later (measured 30 Sep), so the controller confirms it.
+        guard packet(6, "F\(index)Tg", bytes: bytes, size: 4) != nil else { throw PowerFailure("Firmware refused a target for fan \(index + 1)") }
+        guard packet(6, mode, bytes: [1], size: 1) != nil, read(mode) == [1] else {
+            _ = packet(6, mode, bytes: [0], size: 1)
+            throw PowerFailure("Firmware refused manual control of fan \(index + 1); handed back to macOS")
+        }
     }
 }

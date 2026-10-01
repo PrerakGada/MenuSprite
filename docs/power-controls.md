@@ -9,8 +9,8 @@ acceptance boundary below still applies.
 
 MenuSprite 0.3.0 (4). Prerak explicitly authorized battery and sleep controls after
 monitoring. This is the first control implementation, not a verified replacement
-for all AlDente/Vorssaint behavior. Website, capture, fan controls and clipboard
-history are unchanged.
+for all AlDente/Vorssaint behavior. Website, capture and clipboard history are unchanged.
+Fan control arrived on 30 September 2026: `docs/fan-control.md`.
 
 ## Open and use
 
@@ -61,20 +61,58 @@ the stronger closed-lid mode is separate.
 
 ## Administrator helper and coexistence
 
-The app bundles a signed `in.prerakgada.MenuSprite.PowerHelper`, but installation
-and activation are separate. No helper was installed or privileged hardware written
-during this implementation session. AlDente Pro and Vorssaint were already running;
-Vorssaint's existing system sleep-disable setting was preserved.
+> **1 October 2026 — the helper ships in every build, public included.** Prerak: two friends use the
+> public build and need charge limit, fans and the rest working. The helper moved from a Terminal
+> installer to a launchd daemon that macOS manages (`SMAppService`).
 
-For this development-signed, unnotarized build, **Copy install command** supplies:
+**How it is packaged.** The bundle carries the helper at `Contents/MacOS/MenuSpritePowerHelper` and its
+launchd plist at `Contents/Library/LaunchDaemons/in.prerakgada.MenuSprite.PowerDaemon.plist`
+(`BundleProgram`, Mach service of the same name, `AssociatedBundleIdentifiers` = the app). It is signed
+by the same team (`RC63N3VU27`) with hardened runtime; the public build signs it Developer ID with a
+secure timestamp and it is notarized with the app. `scripts/verify-power-helper.sh` checks all of that
+and runs in `package-release.sh`, `build-dmg.sh` and `publish-release.sh`; `--release-validate` checks
+the plist, the helper's signature against `PowerIdentity.helperRequirement`, and that launching
+registered nothing.
 
-```sh
-sudo /bin/bash "$HOME/Applications/MenuSprite.app/Contents/Resources/install-power-helper.sh"
-```
+**How a person turns it on.** Nothing happens at launch: no registration, no prompt. Power Controls,
+the battery menu, the Battery & Power dashboard's warning row and the fan board offer **Turn on power
+controls…**, which calls `SMAppService.daemon(…).register()`. macOS lists MenuSprite under System
+Settings → General → Login Items & Extensions; MenuSprite opens that page, the person switches on
+"Allow in the Background" (macOS asks for the administrator password there), and MenuSprite notices
+within a couple of seconds (it polls the status for five minutes after the click, and on every
+refresh). **Turn off** in Power Controls unregisters it. Code: `PowerHelperInstall.swift`,
+`PowerStore.enableHelper()` / `disableHelper()`.
 
-Run it yourself in Terminal and enter the administrator password there. Return to
-Power Controls and Refresh. Installation enables no controls. This local developer
-installer is used instead of claiming a notarized SMAppService distribution flow.
+**Without the helper** macOS's own charge limit still takes 80–100% in 5% steps through PowerUI's
+client API; any other limit, discharge, sailing below that, Low Power Mode switching, the MagSafe
+light, fans and closed-lid mode need it, and each says so with the button beside it.
+
+**Its own launchd label, not the old one.** The first attempt (1 Oct) registered the bundled daemon under the
+Terminal helper's label, `in.prerakgada.MenuSprite.PowerHelper`. macOS's background-task database keeps a
+"legacy daemon" record per label: `SMAppService.status` reported the new daemon *enabled* while the old one
+was still installed, and once that record was disabled, `register()` failed with "Operation not permitted"
+("Job is not allowed to bootstrap"). The bundled daemon is therefore `in.prerakgada.MenuSprite.PowerDaemon`, and
+`state()` checks for the old files before trusting the status. Verified on Nebula the same day: Turn on →
+approval → launchd runs `Contents/MacOS/MenuSpritePowerHelper` as root; a 65% limit and Full blast / Automatic
+fans worked through it. Diagnostic: `MenuSprite --helper-status`.
+
+**Migrating the old Terminal install.** Builds before 1 October installed the helper with
+`sudo install-power-helper.sh` into `/Library/PrivilegedHelperTools` + `/Library/LaunchDaemons` under the
+same launchd label. The app treats that as `.legacy` (it keeps working) and offers **Update power
+helper…**, which asks for the administrator password once, boots the old daemon out, runs its
+`--restore`, deletes both files and registers the bundled one. The recovery journal is kept and read by
+the new helper. The install/uninstall scripts are gone from the repo and the bundle.
+
+**Updates.** The helper runs from inside the bundle, so updating the app updates it. After its one
+app connection closes it hands everything back and exits about ten seconds later (it used to wait
+up to two minutes; under ten, launchd's ThrottleInterval would delay the next start), so an update rarely meets an old process; if one answers with "Invalid request",
+**Update power helper…** drops the connection and reconnects to the new binary. `build-native.sh
+--install` refuses to overwrite the bundle while the helper is still running. launchd's SIGTERM (turned
+off in System Settings, unregistered, booted out) makes the helper restore before exiting.
+
+**Homebrew.** The cask's `uninstall` stanza deliberately has no `launchctl` entry: it also runs on
+every `brew upgrade` and would boot the helper out and ask for sudo each time. `zap` removes it.
+
 Before starting battery control, turn off charge control in AlDente (or another
 controller) and quit it. MenuSprite never quits a competing app. Battery starts
 are blocked when a known competing controller is detected. Hardware changes by
@@ -84,20 +122,24 @@ a time. Similarly, stop Vorssaint's sleep override before using MenuSprite's.
 
 The helper uses a launchd Mach service, exact app/helper bundle identifiers and
 Apple-signed team requirements (`RC63N3VU27`) in both XPC directions. Its only
-requests are status, heartbeat, battery mode, closed-lid session and stop. No raw
-SMC key/value, command, path or shell execution endpoint is exported. The helper
-runs as root; the GUI stays unprivileged. The installer verifies the staged signed
-helper, installs root-owned files, and adds no sudoers rule.
+requests are status, heartbeat, battery mode, closed-lid session, charge limit, Low
+Power Mode, fans and stop. No raw SMC key/value, command, path or shell execution
+endpoint is exported. The helper runs as root; the GUI stays unprivileged.
 
-- Executable: `/Library/PrivilegedHelperTools/in.prerakgada.MenuSprite.PowerHelper`
-- Service: `/Library/LaunchDaemons/in.prerakgada.MenuSprite.PowerHelper.plist`
+**On Macs other than Nebula** it writes only what it has read first: a fan's mode and target keys only
+when the firmware publishes both as writable with the expected type and size, a speed clamped to that
+fan's own reported minimum and maximum, confirmed by reading back; SMC charge/adapter keys only when
+writable and currently holding one of the two recognised values; the charge limit only through
+PowerUIAgent's preference, 20–100%. Anything else is refused with a reason, never guessed.
+
+- Executable: `MenuSprite.app/Contents/MacOS/MenuSpritePowerHelper` (launchd label and Mach service `in.prerakgada.MenuSprite.PowerDaemon`)
 - Recovery journal: `/Library/Application Support/MenuSprite/PowerRecovery.json`
 - Saved UI preferences: app-owned UserDefaults under the main bundle identity.
 
 Only active controls sample in the helper (15s with tolerance); the app sends a
 20s heartbeat only while a privileged control is active. A heartbeat older than
-65s triggers restoration. An unused, disconnected helper exits after at most
-roughly two minutes; launchd can start it on demand. Idle app keep-awake rules use
+65s triggers restoration. A helper with no app connection and nothing to hold exits;
+launchd starts it on demand. Idle app keep-awake rules use
 power/display/workspace events rather than polling. Ordinary keep-awake uses a
 one-shot expiration task. Opening the page only reads state.
 
@@ -107,19 +149,13 @@ by MenuSprite, reconnecting the adapter first. Unknown original states are rejec
 The helper also receives system-sleep notifications and restores before acknowledging
 sleep. A recovery error remains visible and blocks new battery control. A journal
 is not a guarantee against hardware failure, corrupt storage, OS bugs or an external
-controller writing the same value; these require real acceptance before relying on
-this build unattended.
+controller writing the same value.
 
-Quit MenuSprite before helper upgrades/removal. Remove with:
-
-```sh
-sudo /bin/bash "$HOME/Applications/MenuSprite.app/Contents/Resources/uninstall-power-helper.sh"
-```
-
-Removal stops the service, attempts journal recovery and refuses to remove the
-binary if recovery fails. The journal is retained. If the app cannot run, the signed
-installed helper's `--restore` command is the local root recovery path; stop the
-launch daemon first so no active controller can race recovery.
+If the app cannot run, the signed helper's `--restore` command is the root recovery path
+(`sudo …/MenuSprite.app/Contents/MacOS/MenuSpritePowerHelper --restore`); stop the
+launch daemon first (`sudo launchctl bootout system/in.prerakgada.MenuSprite.PowerDaemon`)
+so no active controller can race recovery. macOS's charge limit is macOS's own setting and
+stays after MenuSprite is gone; change it in System Settings → Battery.
 
 ## Hardware boundary and validation
 

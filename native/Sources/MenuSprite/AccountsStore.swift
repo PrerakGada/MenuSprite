@@ -51,7 +51,11 @@ final class AccountsStore: ObservableObject {
     /// When the board last finished asking for usage, and when it will ask again while it stays open.
     @Published private(set) var lastReloadAt: Date?
     @Published private(set) var nextReloadAt: Date?
+    /// The chosen interval; `UsageRefreshInterval.auto` (0) lets the service pace itself.
     @Published private(set) var refreshInterval: TimeInterval = UsageRefreshInterval.current
+    /// When Auto next wants figures, as the service last reported it.
+    private var autoDue: Date?
+    var isAuto: Bool { refreshInterval == UsageRefreshInterval.auto }
     private(set) var isOpen = false
     /// The board can be on screen twice at once — its own panel and the hub's AI tab — so openings
     /// are counted and the usage data is released only when the last viewer goes away.
@@ -115,12 +119,15 @@ final class AccountsStore: ObservableObject {
     func reload(force: Bool) {
         loadTask?.cancel()
         reloadRequests += 1
+        // ⌘R and the refresh button start Auto's ladder again from the shortest wait.
+        let restart = force
         isLoading = true
         isLoadingUsage = true
         claudeSwitcherRunning = Self.claudeSwitcherIsRunning()
         let switcher = self.switcher
         let source = usageSource
         loadTask = Task { [weak self] in
+            if restart { await source.restartAutoPacing() }
             let overview = await Task.detached(priority: .userInitiated) { switcher.overview() }.value
             guard let self, !Task.isCancelled else { return }
             self.overview = overview
@@ -146,6 +153,7 @@ final class AccountsStore: ObservableObject {
             guard !Task.isCancelled else { return }
             isLoadingUsage = false
             lastReloadAt = Date()
+            autoDue = await source.nextRefreshDate()
             scheduleAutoReload()
             // Scanned from local logs on its own schedule, so it never delays the account rows — and
             // only once Prerak has turned it on, because the first pass is minutes of parsing.
@@ -167,7 +175,7 @@ final class AccountsStore: ObservableObject {
     }
 
     func setRefreshInterval(_ seconds: TimeInterval) {
-        guard UsageRefreshInterval.options.contains(seconds), seconds != refreshInterval else { return }
+        guard UsageRefreshInterval.choices.contains(seconds), seconds != refreshInterval else { return }
         UsageRefreshInterval.current = seconds
         refreshInterval = seconds
         if isOpen { scheduleAutoReload() }
@@ -180,8 +188,9 @@ final class AccountsStore: ObservableObject {
         autoReloadTask?.cancel()
         guard isOpen else { nextReloadAt = nil; return }
         let now = Date()
-        let interval = refreshInterval
-        let expiries = usage.values.compactMap { state -> Date? in
+        // Auto's wait is decided by the service; the fixed choices are counted from each figure.
+        let interval = isAuto ? UsageService.freshness : refreshInterval
+        let expiries = isAuto ? [autoDue].compactMap { $0 } : usage.values.compactMap { state -> Date? in
             if case .loaded(let snapshot) = state { return snapshot.fetchedAt.addingTimeInterval(interval) }
             return nil
         }

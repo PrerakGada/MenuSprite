@@ -127,17 +127,18 @@ final class PermissionStore: NSObject, ObservableObject, CLLocationManagerDelega
         put(.filesAndFolders, .unknown, "Each resource can have different access. No filesystem probes are performed.", "No public universal folder-grant query", ["Desktop", "Documents", "Downloads", "Removable volumes", "Network volumes"].map { .init($0, "Check in System Settings · Not used") })
         put(.automation, .unknown, "No target applications or event types are configured. There is no meaningful aggregate Automation grant.", "App-owned target inventory; no Apple events sent", [.init("Target applications", "None configured")])
         put(.login, StatusMapping.login(SMAppService.mainApp.status), "Registration for this main app only; this is not a privacy grant.", "SMAppService.mainApp.status", [.init("Service", Bundle.main.bundleIdentifier ?? "Unknown identity"), .init("Settings", "System Settings → General → Login Items & Extensions")])
-        let helperInstalled = BuildFeatures.privilegedPowerControls && FileManager.default.fileExists(atPath: PowerIdentity.helperPath)
-        put(.backgroundHelpers, helperInstalled ? .unknown : .notRegistered,
-            helperInstalled ? "MenuSprite's power helper is installed. Check Power Controls for an authenticated live connection; file presence does not prove it is running." : "The signed MenuSprite power helper is bundled but not installed. Install only when choosing battery or closed-lid controls.",
-            "Owned helper installation inventory", [.init("Service", PowerIdentity.service)])
-        put(.administrator, .unknown, "Administrator approval is per operation. The Power Controls installer requires it; this is not a permanent global Administrator grant.", "No universal administrator grant query")
-        put(.hardware, .unknown, "Charge and adapter control capability is probed on Power Controls. Hardware detection, helper availability and feature activation are separate. Fan control is not implemented.", "No generic hardware permission exists")
-        if !BuildFeatures.privilegedPowerControls {
-            for id: PermissionID in [.backgroundHelpers, .administrator, .hardware] {
-                put(id, .unavailableInBuild, "The public preview includes no privileged helper, installer, charge control or closed-lid override. Monitoring and ordinary keep-awake need none.", "Public build capability inventory")
-            }
+        let helper = PowerHelperInstall.state()
+        let helperDetail: String = switch helper {
+        case .on: "MenuSprite's power helper is allowed and registered with macOS. Power Controls shows its live connection."
+        case .needsApproval: "Power controls are turned on, and macOS is waiting for you to allow MenuSprite under Login Items & Extensions."
+        case .legacy: "An older power helper installed from Terminal is in use. Power Controls → Update power helper moves it into the app."
+        case .off: "The signed power helper ships inside MenuSprite but is off. Turn on power controls only when choosing charge, fan or closed-lid controls."
+        case .missing: "This copy of MenuSprite is missing its power helper. Reinstall MenuSprite to use power controls."
         }
+        put(.backgroundHelpers, helper == .on || helper == .legacy ? .enabled : (helper == .needsApproval ? .requiresApproval : .notRegistered),
+            helperDetail, "SMAppService.daemon status", [.init("Service", PowerIdentity.service), .init("Settings", "System Settings → General → Login Items & Extensions")])
+        put(.administrator, .unknown, "Administrator approval is per operation: allowing the power helper in System Settings asks for it once. This is not a permanent global Administrator grant.", "No universal administrator grant query")
+        put(.hardware, .unknown, "Charge, adapter and fan control capability is probed on Power Controls. Hardware detection, helper availability and feature activation are separate.", "No generic hardware permission exists")
         for id: PermissionID in [.selectedFiles, .keychain, .extensions] {
             put(id, .notConfigured, "This build defines no owned service, resource or integration of this type. No system grant is inferred.", "MenuSprite build inventory")
         }

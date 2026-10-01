@@ -25,6 +25,7 @@ final class StudioModel: ObservableObject {
     init(config: SpriteConfiguration, store: MonitoringStore) {
         var value = config
         if value.design == nil { value.design = SpriteDesign.migrated(from: config, metric: store.knownMetric) }
+        Self.placeCommands(&value)
         self.config = value
         self.original = value
         self.store = store
@@ -43,6 +44,7 @@ final class StudioModel: ObservableObject {
     func change(coalesce: Bool = false, _ body: (inout SpriteConfiguration) -> Void) {
         var next = config
         body(&next)
+        Self.placeCommands(&next)
         guard next != config else { return }
         let now = Date()
         if !coalesce || now.timeIntervalSince(lastCoalesced) > 0.8 {
@@ -69,6 +71,24 @@ final class StudioModel: ObservableObject {
         undoStack.append(config); apply(next)
     }
     func revert() { change { $0 = original } }
+    /// The gallery template this sprite came from, if it still exists.
+    var template: SpriteTemplate? { SpriteTemplates.template(config.templateID) }
+    /// Back to the template's design and settings, as one undoable step. Running, menu-bar visibility
+    /// and which side of the bar it sits on are the sprite's own and stay.
+    func resetToTemplate() {
+        guard let template else { return }
+        selection = nil; boardSelection = nil
+        change { $0 = template.reset($0, metric: store.knownMetric) }
+    }
+
+    /// A sprite with a folder of files runs every command there, the ones added here included, as the
+    /// compiler arranges for an agent's: otherwise a new script block's `python3 prs.py` would run in the home
+    /// folder beside the sprite's own button that finds it. A sprite without a folder is left as it is.
+    static func placeCommands(_ config: inout SpriteConfiguration) {
+        guard config.design != nil,
+              let folder = CommandVariableRunner.existingDirectory(SpriteFolders.directory(for: config.id).path) else { return }
+        config.design?.setCommandDirectory(folder)
+    }
 
     private func apply(_ next: SpriteConfiguration) {
         config = next
@@ -85,6 +105,22 @@ final class StudioModel: ObservableObject {
     func saveNow() {
         saveTask?.cancel(); saveTask = nil
         store.save(config)
+    }
+    /// Takes the copy an agent saved through the socket without saving over it. The studio's own copy becomes
+    /// an undo step, so an edit made here a moment earlier is not lost either.
+    func adopt(_ saved: SpriteConfiguration) {
+        saveTask?.cancel(); saveTask = nil
+        guard saved != config else { return }
+        undoStack.append(config); redoStack = []
+        config = saved
+        if let selection, saved.design?.node(selection) == nil { self.selection = nil }
+        if let boardSelection, saved.design?.board?.root.find(boardSelection) == nil { self.boardSelection = nil }
+        store.preview(design: saved.design)
+    }
+    /// Closes without saving: the sprite was removed elsewhere.
+    func discard() {
+        saveTask?.cancel(); saveTask = nil
+        store.preview(design: nil)
     }
     func close() {
         if saveTask != nil { saveNow() }
@@ -190,6 +226,7 @@ private struct StudioHeader: View {
     @ObservedObject var store: MonitoringStore
     let close: () -> Void
     @State private var choosingSymbol = false
+    @ObservedObject private var placement = SpritePlacement.shared
 
     var body: some View {
         HStack(spacing: 12) {
@@ -213,6 +250,15 @@ private struct StudioHeader: View {
                 .help("Off stops its readings and commands").accessibilityIdentifier("sprite-enabled")
             Toggle("In menu bar", isOn: model.binding(\.showInMenuBar)).toggleStyle(.switch).controlSize(.small)
                 .accessibilityIdentifier("sprite-menu-visible")
+            // Where it sits applies at once and is not part of undo: it is this Mac's layout, kept apart from the design.
+            Picker("Side", selection: Binding(get: { placement.isLeft(model.id) }, set: { placement.setLeft(model.id, $0) })) {
+                Text("Left").tag(true)
+                Text("Right").tag(false)
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 92)
+            .disabled(!model.config.showInMenuBar)
+            .help("Left sits over the front app's menus (\(placement.reveal == .hover ? "rest the pointer on it for \(placement.hoverDelay.formatted()) s" : "point at it and hold ⌘") to see them); right sits with the other menu bar items")
+            .accessibilityIdentifier("sprite-side")
             Picker("Refresh", selection: model.binding(\.interval)) {
                 ForEach([1.0, 2, 5, 10, 30, 60], id: \.self) { Text("Every \(Int($0)) s").tag($0) }
             }
@@ -225,6 +271,11 @@ private struct StudioHeader: View {
                 .keyboardShortcut("z", modifiers: [.command, .shift]).disabled(!model.canRedo).help("Redo")
             Button("Revert") { model.revert() }.disabled(!model.hasChanges)
                 .help("Back to how this sprite was when you opened it")
+            if let template = model.template {
+                Button("Reset to template") { model.resetToTemplate() }
+                    .help("Back to the gallery's “\(template.name)”: its design, values, rules and refresh. Undo brings your version back.")
+                    .accessibilityIdentifier("reset-to-template")
+            }
             if !model.isSaved {
                 Button("Add sprite") { model.saveNow() }.keyboardShortcut(.defaultAction).accessibilityIdentifier("save-sprite")
             }
@@ -293,8 +344,14 @@ struct ColorChoice: View {
             ForEach(Self.presets, id: \.self) { hex in
                 swatch(hex, help: "#\(hex)") { Circle().fill(spriteColor(hex)).frame(width: 14, height: 14) }
             }
+            // A system colour by name (an agent's "teal") adapts to light and dark; shown so it is not invisible here.
+            if SpriteColors.system(value) != nil {
+                swatch(value, help: "\(value) (Apple's system colour, adapts to light and dark)") {
+                    Circle().fill(spriteColor(value)).frame(width: 14, height: 14)
+                }
+            }
             ColorPicker("", selection: Binding(
-                get: { value.count == 6 ? spriteColor(value) : .white },
+                get: { SpriteColors.color(value).map { Color(nsColor: $0) } ?? .white },
                 set: { value = Self.hex($0) ?? value }), supportsOpacity: false)
                 .labelsHidden().frame(width: 26).help("Any colour")
         }

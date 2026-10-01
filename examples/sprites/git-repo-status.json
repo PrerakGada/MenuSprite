@@ -1,0 +1,48 @@
+{
+  "menusprite": 1,
+  "name": "Git repos",
+  "icon": "arrow.triangle.branch",
+  "values": [
+    {
+      "id": "dirty",
+      "name": "Uncommitted",
+      "command": "python3 repos.py",
+      "every": "5m",
+      "timeout": 30,
+      "parse": "json",
+      "path": "0.row.0.value"
+    }
+  ],
+  "face": {"row": [{"icon": "arrow.triangle.branch", "id": "glyph", "size": 13}, {"text": "{dirty}", "id": "count"}]},
+  "rules": [
+    {
+      "name": "State",
+      "cases": [
+        {
+          "when": "dirty is missing",
+          "then": [
+            {"target": "count", "hide": true},
+            {"target": "glyph", "icon": "exclamationmark.triangle", "opacity": 0.6}
+          ]
+        },
+        {"when": "dirty == 0", "then": [{"target": "count", "hide": true}, {"target": "glyph", "opacity": 0.5}]}
+      ]
+    }
+  ],
+  "board": {
+    "width": 380,
+    "blocks": [
+      {"blocks": "python3 repos.py", "every": "5m", "timeout": 30},
+      {
+        "row": [
+          {"button": "Edit list", "icon": "pencil", "run": "open -t repos.txt"},
+          {"button": "Scan again", "icon": "arrow.clockwise", "refresh": true}
+        ]
+      }
+    ]
+  },
+  "files": {
+    "repos.py": "#!/usr/bin/env python3\n\"\"\"Git repos for MenuSprite: branch, uncommitted changes and unpushed commits of the folders in repos.txt, as\nboard blocks. The face's value runs this same command (same every and timeout), so one scan feeds both: the\nvalue reads the first tile's figure (path 0.row.0.value) and the board draws the blocks.\"\"\"\nimport json\nimport os\nimport shlex\nimport subprocess\nfrom concurrent.futures import ThreadPoolExecutor\n\nHERE = os.path.dirname(os.path.abspath(__file__))\nSHOWN = 12\nLIMIT = 200  # repositories scanned; more are named in a note rather than slowing every scan\n\n\ndef folders():\n    \"\"\"Each line of repos.txt is a repository, or a folder whose subfolders are repositories.\"\"\"\n    found = []\n    with open(os.path.join(HERE, \"repos.txt\")) as listing:\n        for line in listing:\n            line = line.strip()\n            if not line or line.startswith(\"#\"):\n                continue\n            path = os.path.expanduser(line)\n            # .git is a folder in a clone and a file in a worktree.\n            if os.path.exists(os.path.join(path, \".git\")):\n                found.append(path)\n            elif os.path.isdir(path):\n                found += sorted(os.path.join(path, name) for name in os.listdir(path)\n                                if os.path.exists(os.path.join(path, name, \".git\")))\n    return found\n\n\ndef status(path):\n    # --no-optional-locks: never hold the index lock while the user runs git in the same repo.\n    done = subprocess.run([\"git\", \"--no-optional-locks\", \"-C\", path, \"status\", \"--porcelain=v2\", \"--branch\"],\n                          capture_output=True, text=True, timeout=10)\n    branch, ahead, behind, changes = \"?\", 0, 0, 0\n    if done.returncode != 0:\n        # A repository git cannot read must not pass for a clean one.\n        problem = (done.stderr.strip().splitlines() or [\"git status failed\"])[-1]\n        return {\"name\": os.path.basename(path), \"path\": path, \"branch\": problem, \"ahead\": 0, \"behind\": 0, \"changes\": 0, \"failed\": True}\n    for line in done.stdout.splitlines():\n        if line.startswith(\"# branch.head \"):\n            branch = line.split(\" \", 2)[2]\n        elif line.startswith(\"# branch.ab \"):\n            ahead, behind = (abs(int(n)) for n in line.split(\" \")[2:4])\n        elif not line.startswith(\"#\"):\n            changes += 1\n    return {\"name\": os.path.basename(path), \"path\": path, \"branch\": branch, \"ahead\": ahead, \"behind\": behind, \"changes\": changes, \"failed\": False}\n\n\ndef plain(text):\n    # Board text reads {word} as one of the sprite's values; a folder or branch name never means one.\n    return text.replace(\"{\", \"{\\u200b\")\n\n\ndef row(repo):\n    counts = \"git failed\" if repo[\"failed\"] else \" · \".join(part for part in (\"%d changed\" % repo[\"changes\"] if repo[\"changes\"] else \"\",\n                                          \"%d to push\" % repo[\"ahead\"] if repo[\"ahead\"] else \"\",\n                                          \"%d to pull\" % repo[\"behind\"] if repo[\"behind\"] else \"\") if part)\n    return {\"row\": [\n        {\"stack\": [{\"text\": plain(repo[\"name\"]), \"lines\": 1, \"truncate\": \"middle\"},\n                   {\"text\": plain(repo[\"branch\"]), \"font\": \"caption\", \"color\": \"gray\", \"lines\": 1}], \"spacing\": 1},\n        {\"text\": counts, \"font\": \"caption\", \"color\": \"red\" if repo[\"failed\"] else \"orange\" if repo[\"changes\"] else \"blue\", \"fit\": True},\n    ], \"run\": \"open -a Terminal \" + shlex.quote(repo[\"path\"])}  # a click opens the repository in Terminal\n\n\nwith ThreadPoolExecutor(8) as pool:\n    found = folders()\n    repos = list(pool.map(status, found[:LIMIT]))\nrepos.sort(key=lambda r: (not r[\"changes\"], not r[\"ahead\"], r[\"name\"].lower()))\nbusy = [repo for repo in repos if repo[\"failed\"] or repo[\"changes\"] or repo[\"ahead\"]]\nblocks = [{\"row\": [{\"value\": sum(1 for repo in repos if repo[\"changes\"]), \"caption\": \"Uncommitted\"},\n                   {\"value\": sum(1 for repo in repos if repo[\"ahead\"]), \"caption\": \"To push\"},\n                   {\"value\": len(repos) - len(busy), \"caption\": \"Clean\"}]}]\nif not repos:\n    blocks.append({\"text\": \"No repositories found. Add folders to repos.txt (Edit list).\", \"font\": \"caption\", \"color\": \"gray\"})\nelif busy:\n    rows = [row(repo) for repo in busy[:SHOWN]]\n    if len(busy) > SHOWN:\n        rows.append({\"text\": \"and %d more\" % (len(busy) - SHOWN), \"font\": \"caption\", \"color\": \"gray\"})\n    blocks.append({\"card\": rows, \"title\": \"Needs attention\"})\nelse:\n    blocks.append({\"text\": \"Everything is committed and pushed.\", \"icon\": \"checkmark.circle\", \"color\": \"gray\"})\nif len(found) > LIMIT:\n    blocks.append({\"text\": \"Scanned the first %d of %d repositories.\" % (LIMIT, len(found)), \"font\": \"caption\", \"color\": \"gray\"})\nprint(json.dumps(blocks))\n",
+    "repos.txt": "# One per line: a git repository, or a folder whose subfolders are repositories.\n~/Developer\n"
+  }
+}

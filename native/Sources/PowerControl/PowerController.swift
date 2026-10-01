@@ -14,6 +14,8 @@ struct Recovery: Codable {
     var written: [String:[UInt8]] = [:]
     var previous: [String:[UInt8]] = [:]
     var lidOwned = false
+    /// MenuSprite put the fans in manual mode; a restart must hand them back. Optional so older journals decode.
+    var fansOwned: Bool?
 }
 public final class PowerController {
     let hardware: PowerHardware
@@ -31,7 +33,10 @@ public final class PowerController {
     /// every stop simply hands the LED back to macOS.
     public private(set) var ledControl = false
     var ledWritten: MagSafeLED?
-    public var active: Bool { mode != .off || recovery.lidOwned || ledControl }
+    /// The speed the fans are being held at. Never journaled as intent: the app re-sends it on every
+    /// request, so after a sleep or restart the fans stay with macOS until the app asks again.
+    public private(set) var fanTarget = FanTarget.automatic
+    public var active: Bool { mode != .off || recovery.lidOwned || ledControl || fanTarget.isManual }
     public convenience init() {
         self.init(hardware: BatteryHardware(), recoveryURL: URL(fileURLWithPath: PowerIdentity.journalPath), execute: command)
     }
@@ -108,10 +113,60 @@ public final class PowerController {
         ledWritten = nil
         try? hardware.writeLED(.system)
     }
+    // MARK: Fans
+    func noFanConflict() throws {
+        let processes = try execute("/bin/ps",["-axo","comm="])
+        if let other = processes.split(separator:"\n").first(where: { $0.contains("/Macs Fan Control.app/") || $0.contains("/TG Pro.app/") || $0.contains("/smcFanControl.app/") }) {
+            let name = other.split(separator:"/").first { $0.hasSuffix(".app") }.map { $0.dropLast(4) } ?? "Another fan controller"
+            throw PowerFailure("\(name) is running and controls the fans too. Quit it to use MenuSprite's fan control.")
+        }
+    }
+    func applyFans(_ target: FanTarget) throws {
+        guard let percent = target.percent else { try restoreFans(); return }
+        guard FanPolicy.valid(target) else { throw PowerFailure("Choose a fan speed between 1% and 100%") }
+        try noFanConflict()
+        let fans = hardware.fans().filter(\.controllable)
+        guard !fans.isEmpty else { throw PowerFailure("This Mac's firmware publishes no writable fan control") }
+        recovery.fansOwned = true; try save() // Journal before touching hardware.
+        fanTarget = target
+        for fan in fans { try hardware.writeFan(fan.index, rpm: FanPolicy.rpm(percent: percent, for: fan)) }
+        // The SMC takes about a second to report a new target; wait for it rather than guess.
+        for attempt in 0..<11 {
+            let missed = hardware.fans().filter { $0.controllable && abs(($0.target ?? 0) - FanPolicy.rpm(percent: percent, for: $0)) > 2 }
+            if missed.isEmpty { return }
+            if attempt == 10 { throw PowerFailure("Fan \(missed[0].index + 1) did not take \(Int(FanPolicy.rpm(percent: percent, for: missed[0]))) rpm") }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+    }
+    /// The firmware can fall back to automatic on its own (seen after sleep on other Macs); put it back.
+    func maintainFans() {
+        guard let percent = fanTarget.percent else { return }
+        do {
+            try noFanConflict()
+            for fan in hardware.fans() where fan.controllable {
+                let rpm = FanPolicy.rpm(percent: percent, for: fan)
+                if !fan.manual || abs((fan.target ?? 0) - rpm) > 2 { try hardware.writeFan(fan.index, rpm: rpm) }
+            }
+        } catch {
+            lastError = error.localizedDescription
+            do { try restoreFans() } catch { lastError = (lastError ?? "") + " " + error.localizedDescription }
+        }
+    }
+    func restoreFans() throws {
+        fanTarget = .automatic
+        guard recovery.fansOwned == true else { return }
+        var failure: Error?
+        for fan in hardware.fans() where fan.manual {
+            do { try hardware.writeFan(fan.index, rpm: nil) } catch { failure = error }
+        }
+        if let failure { throw failure }
+        recovery.fansOwned = nil; try save()
+    }
     public func restoreAll() throws {
         guard !recoveryUnavailable else { throw PowerFailure("Cannot restore an unreadable recovery journal") }
         restoreLED()
         var failure: Error?
+        do { try restoreFans() } catch { failure = error }
         do { try restoreBattery() } catch { failure = error }
         do { try restoreLid() } catch { failure = error }
         if let failure { throw failure }
@@ -127,6 +182,10 @@ public final class PowerController {
             do { try restoreBattery() } catch { lastError = error.localizedDescription }
         }
         updateLED()
+        maintainFans()
+        if !fanTarget.isManual && recovery.fansOwned == true {
+            do { try restoreFans() } catch { lastError = error.localizedDescription }
+        }
         do {
             if Date().timeIntervalSince(lastHeartbeat) > 65 { try restoreAll(); throw PowerFailure("Controls stopped because MenuSprite disconnected") }
             let state = hardware.snapshot()
@@ -159,7 +218,7 @@ public final class PowerController {
         schedule()
     }
     public func schedule() {
-        if active || !recovery.original.isEmpty || recovery.lidOwned {
+        if active || !recovery.original.isEmpty || recovery.lidOwned || recovery.fansOwned == true {
             if timer == nil { timer = Timer.scheduledTimer(withTimeInterval:15,repeats:true) { [weak self] _ in self?.tick() }; timer?.tolerance = 2 }
         } else { timer?.invalidate(); timer = nil }
     }
@@ -180,12 +239,13 @@ private func sleepDisabled() -> Bool? {
     }
     return nil
 }
-    public var needsRecovery: Bool { recoveryUnavailable || !recovery.original.isEmpty || recovery.lidOwned }
+    public var needsRecovery: Bool { recoveryUnavailable || !recovery.original.isEmpty || recovery.lidOwned || recovery.fansOwned == true }
     public func snapshot() -> PowerSnapshot {
         var result = hardware.snapshot(); result.mode = mode; result.band = band
         result.lidActive = recovery.lidOwned; result.sleepDisabled = sleepDisabled(); result.helperConnected = true; result.recoveryPending = recoveryUnavailable || (!recovery.original.isEmpty && mode == .off); result.error = lastError
         result.systemLimit = geteuid() == 0 ? SystemChargeLimit.stored() : nil
         result.ledControl = ledControl; result.led = hardware.readLED()
+        result.fanTarget = fanTarget; result.fans = hardware.fans()
         return result
     }
     public func handle(_ request: PowerRequest) -> PowerSnapshot {
@@ -194,8 +254,16 @@ private func sleepDisabled() -> Bool? {
             // Any request is proof the app is alive; the LED setting rides along on every one.
             lastHeartbeat = Date()
             if let led = request.led, led != ledControl || led { setLED(led) }
+            // A fan failure must not cancel the command it rode in on; it hands the fans back instead.
+            if let fans = request.fans, fans != fanTarget || request.action == .fans {
+                do { try applyFans(fans); if request.action == .fans { lastError = nil } }
+                catch {
+                    lastError = error.localizedDescription
+                    do { try restoreFans() } catch { lastError = (lastError ?? "") + " " + error.localizedDescription }
+                }
+            }
             switch request.action {
-            case .status: break
+            case .status, .fans: break
             case .heartbeat: lastHeartbeat = Date()
             case .stopAll: try restoreAll()
             case .stopBattery: try restoreBattery()

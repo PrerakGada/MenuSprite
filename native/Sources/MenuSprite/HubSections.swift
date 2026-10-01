@@ -302,11 +302,26 @@ private struct EnergyBoardHost: NSViewControllerRepresentable {
 /// The menu bar itself: what is showing, what is paused, and a way into the full editor.
 struct HubSpritesSection: View {
     @ObservedObject var monitoring: MonitoringStore
+    @ObservedObject private var placement = SpritePlacement.shared
     let actions: HubActions
     let close: () -> Void
 
     var body: some View {
         HubScroll {
+            HubCard(title: "Left strip") {
+                Picker("Pointing at the strip", selection: $placement.reveal) {
+                    ForEach(SpritePlacement.Reveal.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.radioGroup).labelsHidden().font(.system(size: 12))
+                if placement.reveal == .hover {
+                    Picker("Menus after resting for", selection: $placement.hoverDelay) {
+                        ForEach(SpritePlacement.hoverDelays, id: \.self) { Text("\($0.formatted()) s").tag($0) }
+                    }
+                    .font(.system(size: 12)).fixedSize()
+                }
+                Text("Put a sprite there from its right-click menu or the studio's Left | Right switch. Drag strip sprites to reorder them.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if monitoring.sprites.isEmpty {
                 HubCard {
                     Text("No sprites yet. Open Settings to build your first menu-bar reading.")
@@ -380,12 +395,10 @@ struct HubToolsSection: View {
             HubKeepAwakeCard(power: power, openPowerControls: { close(); actions.openPowerControls() })
             HubMenuBarSpacingCard()
             HubMenuBarIconCard()
+            HubCard(title: "Fans") { FanControlView(power: power) }
             HubCard(title: "Sensors") {
-                HubStat(label: "Fan speed", value: monitoring.hubValue("sensor.fanSpeed"))
                 HubStat(label: "CPU temperature", value: monitoring.hubValue("sensor.cpuTemperature"))
                 HubStat(label: "GPU temperature", value: monitoring.hubValue("sensor.gpuTemperature"))
-                Text("Read-only SMC values. MenuSprite does not change fan control.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
     }

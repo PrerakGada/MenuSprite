@@ -12,6 +12,7 @@ public enum MonitoringCatalog {
         .init("cpu.efficiencyCores", "Efficiency CPU cores", "E cores", .cpu, .count, "Performance-level 1 physical cores on Apple silicon.", source: "hw.perflevel1.physicalcpu"),
         .init("memory.usage", "Memory usage", "RAM", .memory, .percent, "(Anonymous minus purgeable + wired + physical compressor pages) / installed RAM. File cache is excluded; pressure is a separate reading.", source: "Mach host_statistics64 + hw.memsize"),
         .init("memory.used", "Memory used", "RAM", .memory, .bytes, "Anonymous pages minus purgeable pages, plus wired and physical compressor storage. A system estimate, not a sum of process RSS.", source: "Mach VM page counters"),
+        .init("memory.available", "Memory available", "Avail", .memory, .bytes, "Installed memory minus memory used: what apps can take before macOS compresses or swaps. Unlike free pages, it counts cache macOS gives back on demand.", source: "hw.memsize minus Mach VM page counters"),
         .init("memory.total", "Installed memory", "Total", .memory, .bytes, "Physical memory installed in the Mac.", source: "hw.memsize"),
         .init("memory.app", "Anonymous / app memory", "Apps", .memory, .bytes, "Anonymous physical pages minus purgeable pages; excludes physical compression storage.", source: "internal_page_count − purgeable_count"),
         .init("memory.wired", "Wired memory", "Wired", .memory, .bytes, "Physical pages that cannot be paged out.", source: "wire_count × page size"),

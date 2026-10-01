@@ -1,0 +1,97 @@
+{
+  "menusprite": 1,
+  "name": "Network switches",
+  "icon": "network",
+  "values": [
+    {
+      "id": "ts",
+      "name": "Tailscale",
+      "command": "tailscale status --json",
+      "every": "1m",
+      "parse": "json",
+      "path": "BackendState"
+    },
+    {
+      "id": "address",
+      "name": "Tailscale IP",
+      "command": "tailscale status --json",
+      "every": "1m",
+      "parse": "json",
+      "path": "Self.TailscaleIPs.0"
+    },
+    {
+      "id": "tailnet",
+      "name": "Tailnet",
+      "command": "tailscale status --json",
+      "every": "1m",
+      "parse": "json",
+      "path": "CurrentTailnet.Name"
+    },
+    {
+      "id": "peers",
+      "name": "Devices online",
+      "command": "tailscale status --json | jq '[.Peer[]? | select(.Online)] | length'",
+      "every": "1m",
+      "parse": "number"
+    },
+    {"id": "wifi", "name": "Wi-Fi", "command": "./wifi.sh", "every": "30s"}
+  ],
+  "face": {"row": [{"icon": "network", "id": "glyph", "size": 14}]},
+  "rules": [
+    {
+      "name": "Tailscale",
+      "cases": [
+        {
+          "when": "ts is missing",
+          "then": [
+            {"target": "glyph", "icon": "exclamationmark.triangle", "opacity": 0.6},
+            {"target": "tailscaleCard", "hide": true}
+          ]
+        },
+        {
+          "when": "ts != Running",
+          "then": [
+            {"target": "glyph", "icon": "network.slash", "opacity": 0.5},
+            {"target": "tailscaleCard", "hide": true}
+          ]
+        }
+      ]
+    }
+  ],
+  "board": {
+    "width": 340,
+    "blocks": [
+      {
+        "card": [
+          {
+            "toggle": "Tailscale",
+            "icon": "network",
+            "value": "ts",
+            "on": "tailscale up",
+            "off": "tailscale down",
+            "timeout": 60
+          },
+          {"toggle": "Wi-Fi", "icon": "wifi", "value": "wifi", "on": "./wifi.sh on", "off": "./wifi.sh off"}
+        ],
+        "title": "Switches"
+      },
+      {
+        "card": [
+          {"stats": ["tailnet", "peers"]},
+          {
+            "row": [
+              {"text": "{address}", "font": "mono", "lines": 1},
+              {"text": "Copy", "icon": "doc.on.doc", "color": "blue", "copy": "{address}", "fit": true}
+            ]
+          }
+        ],
+        "title": "Tailscale",
+        "id": "tailscaleCard"
+      },
+      {"button": "Tailscale admin", "icon": "safari", "open": "https://login.tailscale.com/admin/machines"}
+    ]
+  },
+  "files": {
+    "wifi.sh": "#!/bin/zsh -f\n# wifi.sh prints \"On\" or \"Off\"; wifi.sh on|off switches Wi-Fi. Finds the Wi-Fi device, which is not always en0.\ndevice=$(networksetup -listallhardwareports | awk '/Wi-Fi/{getline; print $2; exit}')\n[[ -n $device ]] || { echo \"No Wi-Fi hardware\" >&2; exit 1 }\nif [[ -n $1 ]]; then\n  networksetup -setairportpower \"$device\" \"$1\"\nelse\n  networksetup -getairportpower \"$device\" | awk '{print $NF}'\nfi\n"
+  }
+}

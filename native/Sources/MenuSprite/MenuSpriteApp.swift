@@ -1,3 +1,4 @@
+import AgentProtocol
 import AIAccounts
 import AppKit
 import Combine
@@ -8,6 +9,11 @@ import SystemMonitoring
 @main
 struct MenuSpriteMain {
     @MainActor static func main() {
+        // Diagnostic: where the power helper stands with macOS (SMAppService status), with no UI.
+        if CommandLine.arguments.contains("--helper-status") {
+            print("state \(PowerHelperInstall.state()) · SMAppService status \(PowerHelperInstall.service.status.rawValue) (0 notRegistered, 1 enabled, 2 requiresApproval, 3 notFound) · legacy \(PowerHelperInstall.legacyInstalled)")
+            exit(0)
+        }
         // Diagnostic: ask the installed power helper to write macOS's charge limit and print its
         // reply, with no UI. The helper serves one app connection at a time, so quit MenuSprite first.
         if let index = CommandLine.arguments.firstIndex(of: "--limit-set"), CommandLine.arguments.indices.contains(index + 1),
@@ -31,7 +37,10 @@ struct MenuSpriteMain {
         EnergyRenderHarness.runIfRequested()
         MenuBarIconRenderHarness.runIfRequested()
         KeepAwakeRenderHarness.runIfRequested()
+        FanRenderHarness.runIfRequested()
         SpriteStudioRenderHarness.runIfRequested()
+        // The agent server alone, on a scratch store, for testing the `menusprite` command end to end.
+        AgentSandbox.runIfRequested()
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -41,31 +50,33 @@ struct MenuSpriteMain {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var powerStore: PowerStore!
-    private(set) var powerWindow: NSWindow?
+    /// MenuSprite's one window; every full page opens in it on its own tab.
+    private(set) var appWindow: AppWindowController!
     private var statusItem: NSStatusItem?
     private var awakeObserver: AnyCancellable?
     private var iconObserver: NSObjectProtocol?
-    private(set) var settingsWindow: NSWindow?
     private(set) var permissionStore: PermissionStore?
     private var activationObserver: NSObjectProtocol?
     private var validation: NativeValidation?
-    private(set) var monitoringWindow: NSWindow?
     private(set) var monitoringStore: MonitoringStore!
     private(set) var spriteMenuBar: SpriteMenuBar?
     private(set) var accountsStore: AccountsStore?
     private var accountsPanel: AccountsPanelController?
     private(set) var hub: HubPanelController?
-    private(set) var workWindow: NSWindow?
     private(set) var workStore: WorkStore?
+    private var workPreferencesURL: URL?
     private var monitoringValidation: MonitoringValidation?
     private var workspaceObservers: [NSObjectProtocol] = []
     private var headlessMeasurementActive = false
     private(set) var island: IslandController?
     private(set) var islandEnvironment: IslandEnvironment?
-    private var islandSettings: IslandSettingsWindowController?
+    private var islandSettings: IslandSettingsPage?
     private var islandHub: HubModel?
+    /// The socket the `menusprite` command and its MCP server talk to; only the ordinary launch serves it.
+    private var agentServer: AgentServer?
+    private(set) var agentService: AgentService?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let arguments = ProcessInfo.processInfo.arguments
@@ -86,6 +97,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Restores the owned menu-bar spacing if anything cleared it. Silent, and a no-op unless the
         // stored keys have drifted; skipped on validation launches so they write nothing.
         if backgroundWork { MenuBarSpacing.enforce() }
+        appWindow = AppWindowController(pages: .init(make: { [unowned self] in makePage($0) },
+                                                     closed: { [unowned self] in pageClosed($0) },
+                                                     visibility: { [unowned self] page, visible in
+                                                         if page == .island { islandSettings?.visibilityChanged(visible) }
+                                                     }))
         installMenus()
         spriteMenuBar = SpriteMenuBar(store: monitoringStore, power: powerStore, showPower: { [weak self] in self?.showPower() }) { [weak self] config in
             self?.showMonitoring()
@@ -113,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // Render harnesses draw and exit; they must not grab the shortcut or hold the Mac awake.
             if !arguments.contains(where: { $0.hasPrefix("--") && $0.hasSuffix("-render") }) { powerStore.startKeepAwakeServices() }
             startIsland(accounts: accounts)
+            if !arguments.contains(where: { $0.hasPrefix("--") && ($0.hasSuffix("-render") || $0.hasPrefix("--render-")) }) { startAgentServer() }
         }
         if evidenceDirectory == nil { monitoringStore.start() }
         let workspace = NSWorkspace.shared.notificationCenter
@@ -124,10 +141,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         })
         activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                if self.settingsWindow?.isVisible == true { self.permissionStore?.refresh() }
-                if self.monitoringWindow?.isVisible == true { self.monitoringStore.refresh() }
-                if self.powerWindow?.isVisible == true { self.powerStore.refresh() }
+                guard let self, self.appWindow.isVisible, let page = self.appWindow.showing else { return }
+                self.refresh(page)
             }
         }
         if let energyDirectory {
@@ -224,6 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         applicationMenu.addItem(menuItem(BuildFeatures.powerPageTitle + "…", #selector(showPower), "p"))
         applicationMenu.addItem(menuItem("Permissions & Access…", #selector(showSettings), ""))
         applicationMenu.addItem(.separator())
+        applicationMenu.addItem(NSMenuItem(title: "Hide MenuSprite", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
         applicationMenu.addItem(menuItem("Quit MenuSprite", #selector(quit), "q"))
         applicationItem.submenu = applicationMenu
         mainMenu.addItem(applicationItem)
@@ -236,6 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mainMenu.addItem(editItem)
         let windowItem = NSMenuItem()
         let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
         windowMenu.addItem(menuItem("Close", #selector(closeFrontWindow), "w"))
         windowItem.submenu = windowMenu
         mainMenu.addItem(windowItem)
@@ -347,7 +364,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         environment.showHubTab = { [weak self] tab in self?.showHub(tab) }
         environment.showMonitoring = { [weak self] in self?.showMonitoring() }
         environment.showPermissions = { [weak self] in self?.showSettings() }
-        environment.showSettings = { [weak self] section in self?.islandSettings?.show(section: section) }
+        environment.showSettings = { [weak self] section in
+            if let section { self?.islandSettings?.model.reveal(section) }
+            self?.showIslandSettings()
+        }
         let hubModel = HubModel(monitoring: monitoringStore, accounts: accounts)
         islandHub = hubModel
         environment.appPanel = { [weak self, weak island] in
@@ -367,14 +387,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         islandEnvironment = environment
         self.island = island
-        islandSettings = IslandSettingsWindowController(environment: environment, island: island)
+        islandSettings = IslandSettingsPage(environment: environment, island: island)
         island.start()
     }
 
-    @objc func showIslandSettings() {
-        guard !headlessMeasurementActive else { return }
-        islandSettings?.show()
-    }
+    @objc func showIslandSettings() { open(.island) }
 
     /// Validation entry points. They drive the same button and panel a person does.
     func clickBrandItemForValidation() { brandItemClicked() }
@@ -402,70 +419,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return item
     }
 
-    @objc func showSettings() {
-        guard !headlessMeasurementActive else { return }
-        if let window = settingsWindow {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            permissionStore?.refresh()
-            return
-        }
-        let store = PermissionStore()
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1020, height: 780),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "MenuSprite"
-        window.minSize = NSSize(width: 870, height: 560)
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        window.contentView = NSHostingView(rootView: PermissionsView(store: store))
-        window.setFrameAutosaveName("PermissionsAndAccess")
-        window.center()
-        settingsWindow = window
-        permissionStore = store
-        store.opened()
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
+    // MARK: The window's pages
 
-    @objc func showMonitoring() {
-        guard !headlessMeasurementActive else { return }
-        if let window = monitoringWindow {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            monitoringStore.refresh()
-            return
-        }
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 810),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "MenuSprite — Monitoring & Sprites"
-        window.minSize = NSSize(width: 900, height: 650)
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        window.contentView = NSHostingView(rootView: MonitoringView(store: monitoringStore, showPower: { [weak self] in self?.showPower() }, showWork: { [weak self] in self?.showWork() }, showPermissions: { [weak self] in self?.showSettings() }))
-        window.setFrameAutosaveName("MonitoringAndSprites")
-        window.center()
-        monitoringWindow = window
-        monitoringStore.setLibraryOpen(true)
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
+    /// The window while it shows that page, for validation runs.
+    var settingsWindow: NSWindow? { appWindow.window(showing: .access) }
+    var monitoringWindow: NSWindow? { appWindow.window(showing: .sprites) }
+    var powerWindow: NSWindow? { appWindow.window(showing: .power) }
+    var workWindow: NSWindow? { appWindow.window(showing: .work) }
+
+    @objc func showSettings() { open(.access) }
+    @objc func showMonitoring() { open(.sprites) }
+    @objc func showPower() { open(.power) }
     @objc func showWork() { openWork() }
     func openWork(preferencesURL: URL? = nil) {
-        guard !BuildFeatures.publicPreview, !headlessMeasurementActive else { return }
-        if let workWindow { workWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
-        let store = preferencesURL.map { WorkStore(preferencesURL: $0) } ?? WorkStore()
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 850),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "MenuSprite — Work & Clients"
-        window.minSize = NSSize(width: 1010, height: 700)
-        window.isReleasedWhenClosed = false; window.delegate = self
-        window.contentView = NSHostingView(rootView: WorkBoard(store: store))
-        window.setFrameAutosaveName("WorkAndClients"); window.center()
-        workStore = store; workWindow = window; store.opened()
-        window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        guard !BuildFeatures.publicPreview else { return }
+        workPreferencesURL = preferencesURL
+        open(.work)
     }
+
+    /// Opens the window on `page`; asking for the page already showing refreshes it instead.
+    private func open(_ page: AppPage) {
+        guard !headlessMeasurementActive else { return }
+        let showing = appWindow.isVisible && appWindow.showing == page
+        appWindow.show(page)
+        if showing { refresh(page) }
+    }
+
+    private func refresh(_ page: AppPage) {
+        switch page {
+        case .sprites: monitoringStore.refresh()
+        case .power: powerStore.refresh()
+        case .access: permissionStore?.refresh()
+        case .island: islandSettings?.refreshChecks()
+        case .work: break
+        }
+    }
+
+    /// Builds a page and opens what it reads; `pageClosed` undoes exactly this.
+    private func makePage(_ page: AppPage) -> NSView {
+        switch page {
+        case .sprites:
+            monitoringStore.setLibraryOpen(true)
+            return host(MonitoringView(store: monitoringStore))
+        case .power:
+            powerStore.opened()
+            return host(PowerView(store: powerStore))
+        case .island:
+            return islandSettings?.makeView() ?? host(Text("The Dynamic Island is not running in this launch.")
+                .foregroundStyle(.secondary).frame(minWidth: 820, maxWidth: .infinity, minHeight: 640, maxHeight: .infinity))
+        case .work:
+            let store = workPreferencesURL.map { WorkStore(preferencesURL: $0) } ?? WorkStore()
+            workStore = store
+            store.opened()
+            return host(WorkBoard(store: store))
+        case .access:
+            let store = PermissionStore()
+            permissionStore = store
+            store.opened()
+            return host(PermissionsView(store: store))
+        }
+    }
+
+    private func pageClosed(_ page: AppPage) {
+        switch page {
+        case .sprites: monitoringStore.setLibraryOpen(false)
+        case .power: powerStore.closed()
+        case .island: islandSettings?.closed()
+        case .work: workStore?.closed(); workStore = nil; workPreferencesURL = nil
+        case .access: permissionStore?.closed(); permissionStore = nil
+        }
+    }
+
+    /// A page's view passes only its minimum size to the window, which otherwise keeps the size it has.
+    private func host<Content: View>(_ view: Content) -> NSView {
+        let host = NSHostingView(rootView: view)
+        host.sizingOptions = [.minSize]
+        return host
+    }
+
     @objc func showEnergy() {
         guard !headlessMeasurementActive else { return }
         if let sprite = monitoringStore.sprites.first(where: { $0.processPanelKind == .power && $0.showInMenuBar }) {
@@ -488,70 +519,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             panel.show(anchor: anchor, anchorWindow: window)
         }
     }
-    @objc func showPower() {
-        guard !headlessMeasurementActive else { return }
-        if let powerWindow { powerWindow.makeKeyAndOrderFront(nil); powerStore.opened(); NSApp.activate(ignoringOtherApps:true); return }
-        let window = NSWindow(contentRect:NSRect(x:0,y:0,width:970,height:880),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        window.title = "MenuSprite — " + BuildFeatures.powerPageTitle
-        window.minSize = NSSize(width:850,height:650); window.isReleasedWhenClosed = false; window.delegate = self
-        window.contentView = NSHostingView(rootView:PowerView(store:powerStore,showPermissions:{ [weak self] in self?.showSettings() }))
-        window.setFrameAutosaveName("PowerControls"); window.center(); powerWindow = window
-        powerStore.opened(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true)
-    }
     @objc func closeMonitoring() { monitoringWindow?.close() }
     @objc func closeSettings() { settingsWindow?.close() }
     @objc func closeFrontWindow() {
         // `keyWindow` is nil while no window of this app is focused, so a window is only matched
         // when it actually exists: `nil === nil` would otherwise swallow the command.
-        let key = NSApp.keyWindow
-        if let workWindow, key === workWindow { workWindow.close(); return }
+        if let window = appWindow.window, NSApp.keyWindow === window { window.close(); return }
         if hub?.isVisible == true { hub?.close(); return }
         if accountsPanel?.isVisible == true { accountsPanel?.close(); return }
         if spriteMenuBar?.closePresentedBoard() == true { return }
-        if let powerWindow, key === powerWindow { powerWindow.close() }
-        else if let settingsWindow, key === settingsWindow { closeSettings() }
-        else { closeMonitoring() }
+        appWindow.close()
     }
     @objc func quit() { NSApp.terminate(nil) }
 
-    func windowWillClose(_ notification: Notification) {
-        if let closing = notification.object as? NSWindow, closing === workWindow {
-            workStore?.closed(); workWindow?.contentView = nil; workWindow?.delegate = nil
-            workWindow = nil; workStore = nil; return
-        }
-        if let closing = notification.object as? NSWindow, closing === monitoringWindow {
-            monitoringStore.setLibraryOpen(false)
-            monitoringWindow?.contentView = nil
-            monitoringWindow?.delegate = nil
-            monitoringWindow = nil
-            return
-        }
-        if let closing = notification.object as? NSWindow, closing === powerWindow {
-            powerStore.closed(); powerWindow?.contentView = nil; powerWindow?.delegate = nil; powerWindow = nil; return
-        }
-        permissionStore?.closed()
-        settingsWindow?.contentView = nil
-        settingsWindow?.delegate = nil
-        permissionStore = nil
-        settingsWindow = nil
-    }
-
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard !headlessMeasurementActive else { return false }
-        showMonitoring()
+        open(appWindow.page)
         return true
     }
     func finishHeadlessMeasurement() { headlessMeasurementActive = false }
 
+    /// Serves agents at `AgentSocket.path`. A second copy of the app finds the socket answered and leaves it
+    /// to the first; the listener costs nothing until a connection arrives.
+    private func startAgentServer() {
+        let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/menusprite")
+        if FileManager.default.isExecutableFile(atPath: cli.path) { CommandVariableRunner.extraEnvironment["MENUSPRITE_CLI"] = cli.path }
+        let service = AgentService(store: monitoringStore, host: .app(power: powerStore) { [weak self] id in
+            self?.spriteMenuBar?.toggleBoard(id)
+        })
+        let server = AgentServer(path: AgentSocket.path, handler: service.handler())
+        do {
+            try server.start()
+            agentService = service; agentServer = server
+        } catch {
+            NSLog("MenuSprite: the agent socket is not available: %@", "\(error)")
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        agentServer?.stop()
         island?.stop()
-        islandSettings?.close()
-        permissionStore?.closed()
+        appWindow.close()
         powerStore.shutdown()
         accountsStore?.stop()
         accountsPanel?.close()
         hub?.close()
-        workStore?.closed()
         spriteMenuBar?.removeAll()
         monitoringStore.stop()
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }

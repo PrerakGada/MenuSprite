@@ -49,10 +49,20 @@ final class SpriteMenuBar {
         let visible = store.sprites.filter(\.showInMenuBar)
         let ids = visible.map(\.id)
         let left = ids.filter(placement.isLeft)
+        let right = ids.filter { !placement.isLeft($0) }
+        if left != leftOrder, Set(left) == Set(leftOrder), right == order.filter({ !leftOrder.contains($0) }) {
+            // Only the strip's order changed (a sprite was dragged): re-arrange it, leave the right side be.
+            strip?.arrange(left.compactMap { id in items[id].map { (id, $0.button) } })
+            order = ids; leftOrder = left
+        }
         if ids != order || left != leftOrder {
             for item in items.values { item.remove() }
             items = [:]
-            if left.isEmpty { strip?.tearDown(); strip = nil } else if strip == nil { strip = LeftStrip() }
+            if left.isEmpty { strip?.tearDown(); strip = nil } else if strip == nil {
+                let created = LeftStrip()
+                created.reorder = { [weak self] ids in self?.store.reorder(ids) }
+                strip = created
+            }
             // Status items grow leftward from the main icon; reverse creation preserves
             // the user's left-to-right configuration order within this app's items.
             for config in visible.reversed() {
@@ -60,7 +70,7 @@ final class SpriteMenuBar {
                                                   store: store, power: power, showPower: showPower, openEditor: openEditor,
                                                   openAccounts: { [weak self] anchor, window in self?.openAccounts?(anchor, window) })
             }
-            strip?.arrange(left.compactMap { items[$0]?.button })
+            strip?.arrange(left.compactMap { id in items[id].map { (id, $0.button) } })
             order = ids; leftOrder = left
         }
         for config in visible { items[config.id]?.update(config) }
@@ -283,6 +293,19 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         }
         if config.processPanelKind != nil {
             showMemoryPanel(button: button, configure: configure)
+            return
+        }
+        if config.opensFanBoard {
+            let board = NSPopover()
+            board.behavior = .transient
+            board.delegate = self
+            let host = NSHostingController(rootView: FanBoard(store: store, power: power, id: config.id, configure: configure))
+            host.sizingOptions = [.preferredContentSize]
+            board.contentViewController = host
+            popover = board
+            store.openBoard(config.id)
+            board.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            if item == nil { installDismissal() }
             return
         }
         let board = NSPopover()

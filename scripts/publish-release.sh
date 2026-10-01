@@ -38,7 +38,7 @@ PY
 codesign --verify --strict -R '=anchor apple generic and identifier "in.prerakgada.MenuSprite" and certificate leaf[subject.OU] = "RC63N3VU27" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' "$app"
 xcrun stapler validate "$app"
 spctl --assess --type execute --verbose=2 "$app"
-[[ ! -e "$app/Contents/Resources/MenuSpritePowerHelper" ]] || { echo 'Privileged helper found; refusing publication.' >&2; exit 1; }
+"$repo_root/scripts/verify-power-helper.sh" "$app" --developer-id
 python3 "$repo_root/scripts/generate-homebrew-cask.py" "$asset" "$release_root/menusprite.rb"
 # This clone contains only public distribution metadata, never the source checkout.
 if ! gh repo view "$release_repo" --json name >/dev/null 2>&1; then

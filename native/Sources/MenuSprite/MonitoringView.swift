@@ -3,13 +3,12 @@ import SystemMonitoring
 
 struct MonitoringView: View {
     @ObservedObject var store: MonitoringStore
-    var showPower: () -> Void = {}
-    var showWork: () -> Void = {}
-    let showPermissions: () -> Void
     @State private var search = ""
     /// The sprite open in the studio, which then fills the right side of the window.
     @State private var studio: StudioModel?
     @AppStorage("MenuSprite.OpenReadingGroups") private var openGroupsStored = "CPU|Memory"
+    /// What the right side shows while no sprite is open: the gallery or every reading.
+    @AppStorage("MenuSprite.SpritesPane") private var pane = "gallery"
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
@@ -21,9 +20,6 @@ struct MonitoringView: View {
                     Text(BuildFeatures.publicPreview ? "Public preview · choose your menu-bar readings." : "Choose your readings. Make the menu bar yours.").font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if !BuildFeatures.publicPreview { Button("Work & Clients", action: showWork).controlSize(.small) }
-                Button(BuildFeatures.powerPageTitle,action:showPower).controlSize(.small)
-                Button("Permissions & Access", action: showPermissions).controlSize(.small)
                 Button { store.refresh() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     .keyboardShortcut("r", modifiers: .command).accessibilityIdentifier("refresh-monitoring")
             }.padding(24)
@@ -35,7 +31,15 @@ struct MonitoringView: View {
                         .id(studio.id)
                         .frame(minWidth: 820, maxWidth: .infinity)
                 } else {
-                    readingLibrary.frame(minWidth: 520, maxWidth: .infinity)
+                    VStack(spacing: 0) {
+                        Picker("Show", selection: $pane) {
+                            Text("Gallery").tag("gallery")
+                            Text("Readings").tag("readings")
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 220)
+                        .padding(.top, 12).accessibilityIdentifier("sprites-pane")
+                        if pane == "readings" { readingLibrary } else { SpriteGallery(store: store) { open($0) } }
+                    }.frame(minWidth: 520, maxWidth: .infinity)
                 }
             }
             Divider()
@@ -64,6 +68,12 @@ struct MonitoringView: View {
             if let config = store.editingSprite { open(config) }
             store.isShowingEditor = false
         }
+        // An agent changed or removed the sprite open here: take its copy rather than saving ours over it.
+        .onChange(of: store.lastAgentChange) { _, change in
+            guard let change, let studio, studio.id == change.id else { return }
+            if let saved = store.sprites.first(where: { $0.id == change.id }) { studio.adopt(saved) }
+            else { studio.discard(); self.studio = nil }
+        }
         .onDisappear { studio?.close() }
     }
 
@@ -91,22 +101,16 @@ struct MonitoringView: View {
                 Text("\(store.sprites.count)").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Menu {
-                    Button("Blank sprite") { open(Self.blankSprite) }
-                    Divider()
-                    Section("Start from") {
-                        ForEach(Self.presets, id: \.0) { name, icon, ids in
-                            Button { open(SpriteConfiguration(name: name, symbol: icon, metricIDs: ids)) }
-                                label: { Label(name, systemImage: icon) }
-                        }
-                    }
-                } label: { Image(systemName: "plus") } primaryAction: { open(Self.blankSprite) }
-                    .menuStyle(.borderlessButton).fixedSize()
-                    .help("New sprite · hold for presets").accessibilityLabel("New sprite").accessibilityIdentifier("new-sprite")
+                    Button { closeStudio(); pane = "gallery" } label: { Label("From the gallery…", systemImage: "square.grid.2x2") }
+                    Button { open(Self.blankSprite) } label: { Label("Blank sprite", systemImage: "square.dashed") }
+                } label: { Image(systemName: "plus") }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("New sprite").accessibilityLabel("New sprite").accessibilityIdentifier("new-sprite")
             }.padding(.horizontal, 16).padding(.vertical, 14)
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     if store.sprites.isEmpty {
-                        Text("Add a reading from the library, or press + to start from a preset.")
+                        Text("Nothing in the menu bar yet. Add something from the gallery, or press + for a blank sprite.")
                             .font(.callout).foregroundStyle(.secondary).padding(.vertical, 20)
                     }
                     if let studio, !studio.isSaved {
@@ -123,15 +127,6 @@ struct MonitoringView: View {
                 .padding(.horizontal, 16).padding(.vertical, 10)
         }
     }
-
-    static let presets: [(String, String, [String])] = [
-        ("CPU", "cpu", ["cpu.usage"]), ("Memory", "memorychip", ["memory.usage"]),
-        ("Network", "network", ["network.download", "network.upload"]),
-        ("Battery", "battery.100percent", ["battery.charge"]),
-        ("Power & temperature", "bolt", ["sensor.PSTR", "sensor.cpuTemperature"]),
-        ("Claude usage", "sparkles", ["ai.claude.session", "ai.claude.weekly"]),
-        ("Codex usage", "terminal", ["ai.codex.session", "ai.codex.weekly"])
-    ]
 
     private var readingLibrary: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -223,6 +218,16 @@ private struct SpriteRow: View {
         Button("Move down in list") { store.move(config.id, offset: 1) }
         Button("Duplicate") {
             var copy = config; copy.id = UUID(); copy.name = "\(config.name) copy"
+            // The copy gets its own copy of the sprite's files and runs its commands there: sharing the
+            // original's folder would share its state, and removing the original would leave the copy's
+            // commands running in the home folder instead.
+            let files = SpriteFolders.directory(for: config.id), own = SpriteFolders.directory(for: copy.id)
+            if CommandVariableRunner.existingDirectory(files.path) != nil, (try? FileManager.default.copyItem(at: files, to: own)) != nil {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: own.path)
+                copy.design?.setCommandDirectory(own.path)
+            } else {
+                copy.design?.setCommandDirectory(nil)
+            }
             store.save(copy)
         }
         Divider()
@@ -256,6 +261,5 @@ struct MenuBarChip: View {
 }
 
 func spriteColor(_ hex: String) -> Color {
-    guard let value = UInt32(hex, radix: 16) else { return Color(nsColor: .labelColor) }
-    return Color(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
+    Color(nsColor: SpriteColors.color(hex) ?? .labelColor)
 }

@@ -1,0 +1,128 @@
+{
+  "menusprite": 1,
+  "name": "AI limits",
+  "icon": "sparkles",
+  "every": 60,
+  "values": [
+    {"id": "session", "reading": "ai.claude.session", "name": "Session"},
+    {"id": "sessionReset", "reading": "ai.claude.sessionReset", "clock": true},
+    {"id": "weekly", "reading": "ai.claude.weekly", "name": "Week"},
+    {"id": "weeklyReset", "reading": "ai.claude.weeklyReset", "clock": true},
+    {"id": "sonnet", "reading": "ai.claude.sonnet", "name": "Sonnet"},
+    {"id": "plan", "reading": "ai.claude.plan", "name": "Plan"},
+    {"id": "account", "reading": "ai.claude.account", "name": "Account"},
+    {"id": "codex", "reading": "ai.codex.session", "name": "Codex 5 h"},
+    {"id": "codexWeekly", "reading": "ai.codex.weekly", "name": "Codex week"},
+    {"id": "codexReset", "reading": "ai.codex.weeklyReset", "clock": true},
+    {"id": "codexPlan", "reading": "ai.codex.plan", "name": "Plan"}
+  ],
+  "face": {
+    "row": [
+      {"icon": "exclamationmark.triangle", "id": "noData", "hidden": true, "opacity": 0.6},
+      {
+        "column": [
+          {"text": "5h {session}", "id": "five", "size": 9, "weight": "semibold"},
+          {"text": "7d {weekly}", "id": "seven", "size": 9, "weight": "semibold"}
+        ],
+        "id": "lines"
+      }
+    ]
+  },
+  "rules": [
+    {
+      "name": "Session pace",
+      "cases": [
+        {
+          "when": "session.pace == over",
+          "then": [{"target": "five", "color": "red"}, {"target": "sessionGauge", "color": "red"}]
+        },
+        {
+          "when": "session.pace == ahead",
+          "then": [{"target": "five", "color": "orange"}, {"target": "sessionGauge", "color": "orange"}]
+        }
+      ]
+    },
+    {
+      "name": "Weekly pace",
+      "cases": [
+        {
+          "when": "weekly.pace == over",
+          "then": [{"target": "seven", "color": "red"}, {"target": "weeklyGauge", "color": "red"}]
+        },
+        {
+          "when": "weekly.pace == ahead",
+          "then": [{"target": "seven", "color": "orange"}, {"target": "weeklyGauge", "color": "orange"}]
+        }
+      ]
+    },
+    {
+      "name": "No Claude data",
+      "when": "session is missing and weekly is missing",
+      "then": [
+        {"target": "lines", "hide": true},
+        {"target": "noData", "show": true},
+        {"target": "claudeCard", "hide": true},
+        {"target": "signedOut", "show": true}
+      ]
+    },
+    {"name": "No Sonnet limit", "when": "sonnet is missing", "then": [{"target": "sonnetGauge", "hide": true}]},
+    {
+      "name": "No Codex",
+      "when": "codex is missing and codexWeekly is missing",
+      "then": [{"target": "codexCard", "hide": true}]
+    }
+  ],
+  "board": {
+    "width": 380,
+    "blocks": [
+      {
+        "card": [
+          {"text": "No Claude usage to show", "font": "headline", "icon": "exclamationmark.triangle"},
+          {
+            "text": "MenuSprite reads it with Claude Code's login. Run claude in Terminal and sign in, then Refresh.",
+            "font": "caption",
+            "color": "gray"
+          }
+        ],
+        "id": "signedOut",
+        "hidden": true
+      },
+      {
+        "card": [
+          {
+            "gauge": "session",
+            "id": "sessionGauge",
+            "caption": "Session · 5 hours",
+            "detail": "{session} · resets {sessionReset}"
+          },
+          {
+            "gauge": "weekly",
+            "id": "weeklyGauge",
+            "caption": "Week · all models",
+            "detail": "{weekly} · resets {weeklyReset}"
+          },
+          {"gauge": "sonnet", "id": "sonnetGauge", "caption": "Week · Sonnet"},
+          {"divider": true},
+          {"stats": ["plan", "account"]}
+        ],
+        "title": "Claude",
+        "id": "claudeCard"
+      },
+      {
+        "card": [
+          {"gauge": "codex", "caption": "5 hours"},
+          {"gauge": "codexWeekly", "caption": "Week", "detail": "{codexWeekly} · resets {codexReset}"},
+          {"stats": ["codexPlan"]}
+        ],
+        "title": "Codex",
+        "id": "codexCard"
+      },
+      {
+        "row": [
+          {"button": "Claude usage", "icon": "safari", "open": "https://claude.ai/settings/usage"},
+          {"button": "Refresh", "icon": "arrow.clockwise", "refresh": true}
+        ]
+      }
+    ]
+  }
+}

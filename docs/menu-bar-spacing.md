@@ -57,3 +57,15 @@ one means an Automation consent prompt and a change to the public build.
   launched (22 Sep 18:53) with both keys already 0. Its spacing is internal (`leadingItemSpacing`,
   `trailingItemSpacing`), with no key in its binary or in `com.apple.MenuBarAgent`. Changing it would
   mean patching a SIP-protected system process, so there is no supported way to change it.
+- **Re-checked 1 Oct (macOS 27.0.1), after Prerak asked why Bartender managed it.** Bartender's tight
+  system icons were on macOS 26: install history shows 26.6.2 until macOS 27.0 went on 15 Sep, and on 26
+  Wi-Fi/Bluetooth were ordinary status items that honoured the keys. On 27, Accessibility frames show
+  Bluetooth, Wi-Fi, Control Center and the clock all owned by `MenuBarAgent` (pid launched 29 Sep, keys
+  already 0): 7 pt between a system item and a third-party one, 16 pt between two system items, while
+  third-party items overlap by 2 pt. Spacing lives in the layout engine's computed
+  `MenuBarLayoutParameters` (`leadingItemSpacing`, `trailingItemSpacing`, `prefersCondensedFont`,
+  `fontSize`, `textSquishingFactor`). The agent's only user-tunable tree, `MenuBarAgentSettings` (read from
+  `com.apple.MenuBarAgent`), has no spacing leaf: its fields are hover, live-activity, animation and glass
+  values (`showMenuItemsOnHover`, `trailingItemPreferredPositions`, `animationSpeed`, …). Others report the
+  same (jiunbae/settings PR #25: restarting MenuBarAgent does not help). The only route left is to take
+  items out of Apple's group: hide them and draw MenuSprite sprites in their place.

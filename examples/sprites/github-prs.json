@@ -1,0 +1,52 @@
+{
+  "menusprite": 1,
+  "name": "GitHub PRs",
+  "icon": "arrow.triangle.pull",
+  "values": [
+    {
+      "id": "review",
+      "name": "To review",
+      "command": "gh search prs --review-requested=@me --state=open --limit 100 --json number --jq length",
+      "every": "5m",
+      "timeout": 20,
+      "parse": "number"
+    }
+  ],
+  "face": {
+    "row": [
+      {"icon": "arrow.triangle.pull", "id": "glyph", "size": 13},
+      {"text": "{review}", "id": "count", "weight": "semibold"}
+    ]
+  },
+  "rules": [
+    {
+      "name": "Waiting",
+      "cases": [
+        {
+          "when": "review is missing",
+          "then": [
+            {"target": "count", "hide": true},
+            {"target": "glyph", "icon": "exclamationmark.triangle", "opacity": 0.6}
+          ]
+        },
+        {"when": "review == 0", "then": [{"target": "count", "hide": true}]}
+      ],
+      "else": [{"target": "count", "color": "orange"}]
+    }
+  ],
+  "board": {
+    "width": 380,
+    "blocks": [
+      {"blocks": "python3 prs.py", "every": "2m", "timeout": 30},
+      {
+        "row": [
+          {"button": "Review queue", "icon": "safari", "open": "https://github.com/pulls/review-requested"},
+          {"button": "Refresh", "icon": "arrow.clockwise", "refresh": true}
+        ]
+      }
+    ]
+  },
+  "files": {
+    "prs.py": "#!/usr/bin/env python3\n\"\"\"The GitHub PRs board: open pull requests from gh, as MenuSprite blocks. Each PR is a clickable row.\"\"\"\nimport json\nimport subprocess\nfrom concurrent.futures import ThreadPoolExecutor\nfrom datetime import datetime, timezone\n\nFIELDS = \"number,title,repository,author,updatedAt,isDraft,url\"\nSHOWN = 6\n\n\ndef search(query):\n    done = subprocess.run([\"gh\", \"search\", \"prs\", query, \"--state=open\", \"--limit=50\", \"--json\", FIELDS],\n                          capture_output=True, text=True, timeout=25)\n    if done.returncode != 0:\n        raise RuntimeError((done.stderr.strip().splitlines() or [\"gh exited with status %d\" % done.returncode])[-1])\n    return json.loads(done.stdout)\n\n\ndef plain(text):\n    # Board text reads {word} as one of the sprite's values; a PR title never means one.\n    return text.replace(\"{\", \"{\\u200b\")\n\n\ndef age(stamp):\n    seconds = (datetime.now(timezone.utc) - datetime.fromisoformat(stamp.replace(\"Z\", \"+00:00\"))).total_seconds()\n    for unit, size in ((\"d\", 86400), (\"h\", 3600), (\"m\", 60)):\n        if seconds >= size:\n            return \"%d%s\" % (seconds // size, unit)\n    return \"now\"\n\n\ndef card(title, prs, empty, author=True):\n    rows = [{\"stack\": [\n        {\"text\": plain(pr[\"title\"]), \"lines\": 1},\n        {\"text\": \" · \".join(part for part in (\n            \"%s #%d\" % (pr[\"repository\"][\"nameWithOwner\"], pr[\"number\"]),\n            pr[\"author\"][\"login\"] if author else \"\", age(pr[\"updatedAt\"]), \"draft\" if pr.get(\"isDraft\") else \"\") if part),\n         \"font\": \"caption\", \"color\": \"gray\", \"lines\": 1},\n    ], \"spacing\": 2, \"open\": pr[\"url\"]} for pr in prs[:SHOWN]]\n    if len(prs) > SHOWN:\n        rows.append({\"text\": \"and %d more on GitHub\" % (len(prs) - SHOWN), \"font\": \"caption\", \"color\": \"gray\",\n                     \"open\": \"https://github.com/pulls\"})\n    return {\"card\": rows or [{\"text\": empty, \"font\": \"caption\", \"color\": \"gray\"}], \"title\": \"%s · %d\" % (title, len(prs))}\n\n\ntry:\n    with ThreadPoolExecutor(2) as pool:  # both searches at once: each takes a second or two\n        review, mine = pool.map(search, [\"--review-requested=@me\", \"--author=@me\"])\nexcept Exception as error:  # gh missing, signed out or offline: say so on the board instead of a bare error\n    print(json.dumps([\n        {\"text\": \"GitHub did not answer\", \"font\": \"headline\", \"icon\": \"exclamationmark.triangle\"},\n        {\"text\": plain(str(error)), \"font\": \"caption\", \"color\": \"gray\"},\n        {\"text\": \"If you are signed out, run gh auth login in Terminal, then Refresh.\", \"font\": \"caption\"},\n    ]))\n    raise SystemExit(0)\n\nprint(json.dumps([\n    card(\"Waiting for your review\", review, \"Nothing is waiting for you.\"),\n    card(\"Your pull requests\", mine, \"You have no open pull requests.\", author=False),\n]))\n"
+  }
+}

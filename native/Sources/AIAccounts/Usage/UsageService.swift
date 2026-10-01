@@ -4,15 +4,22 @@ import Foundation
 /// in the AI Accounts board; the menu-bar readings and the board both follow it. Shorter than five
 /// minutes is Prerak's call, not OpenUsage's: a provider that answers 429 puts the account in a
 /// cooldown and the last good values are shown with a notice meanwhile.
+///
+/// **Auto** (the default, saved as 0) lets `UsageAutoPacer` decide: two minutes while usage is moving,
+/// backing off towards an hour while nothing changes, a minute when the 5-hour session is nearly full.
 public enum UsageRefreshInterval {
     public static let key = "MenuSprite.AIUsageRefreshSeconds"
+    /// The saved value that means "Auto".
+    public static let auto: TimeInterval = 0
     public static let options: [TimeInterval] = [60, 120, 300, 600, 900, 1800]
+    /// Everything the board offers, Auto first.
+    public static let choices: [TimeInterval] = [auto] + options
     public static let standard: TimeInterval = 300
 
     public static var current: TimeInterval {
         get {
-            let saved = UserDefaults.standard.double(forKey: key)
-            return options.contains(saved) ? saved : standard
+            guard let saved = UserDefaults.standard.object(forKey: key) as? Double else { return auto }
+            return options.contains(saved) ? saved : auto
         }
         set { UserDefaults.standard.set(newValue, forKey: key) }
     }
@@ -31,7 +38,7 @@ public enum UsageRefreshInterval {
 /// board keeps its last figures until the CLI renews it. Only switcher-saved copies of accounts the CLI
 /// is not using are rotated, and only into their own saved copy.
 public actor UsageService: UsageFetching {
-    public static let shared = UsageService(refreshInterval: { UsageRefreshInterval.current })
+    public static let shared = UsageService(refreshInterval: { UsageRefreshInterval.current }, verifiesLiveIdentity: true)
 
     /// OpenUsage's cadence, the default when no interval has been chosen.
     public static let freshness: TimeInterval = UsageRefreshInterval.standard
@@ -40,6 +47,8 @@ public actor UsageService: UsageFetching {
     static let rateLimitCooldown: TimeInterval = 300
     /// A request that never reached the server can be retried before the freshness interval.
     static let connectionRetry: TimeInterval = 60
+    /// How long the token-to-account match for the live login is reused before the saved copies are read again.
+    static let liveOwnerLifetime: TimeInterval = 60
 
     enum Source: Hashable, Sendable {
         case live
@@ -78,6 +87,8 @@ public actor UsageService: UsageFetching {
         /// Ordinary results follow the chosen refresh interval, read at lookup so a change applies at
         /// once; rate-limit cooldowns and connection retries keep their own fixed length.
         let followsRefreshInterval: Bool
+        /// What Auto decided for this result; used only while the chosen interval is Auto.
+        let autoInterval: TimeInterval?
         let lastGood: UsageSnapshot?
     }
 
@@ -88,14 +99,23 @@ public actor UsageService: UsageFetching {
     private let http: any HTTPTransport
     private let now: @Sendable () -> Date
     private let refreshInterval: @Sendable () -> TimeInterval
+    /// Ask Anthropic which account the live Claude login is when no saved copy matches it. Off in tests
+    /// and sandboxed runs, where the state file is trusted.
+    private let verifiesLiveIdentity: Bool
+    private let verifiedLogins: VerifiedClaudeLogins
     private var entries: [Key: Entry] = [:]
     private var cooldowns: [CooldownKey: Date] = [:]
+    private var pacers: [Key: UsageAutoPacer] = [:]
+    private var liveOwner: (fingerprint: String, email: String?, at: Date)?
     private var inFlight: [Key: Task<Result<UsageSnapshot, UsageError>, Never>] = [:]
     private var claudeStateStamp: (modified: Date, size: Int, email: String?)?
 
     public init(paths: AIAccountPaths = .standard, keychain: any KeychainStoring = SystemKeychain(),
                 http: any HTTPTransport = URLSessionTransport(), now: @escaping @Sendable () -> Date = Date.init,
-                refreshInterval: @escaping @Sendable () -> TimeInterval = { UsageService.freshness }) {
+                refreshInterval: @escaping @Sendable () -> TimeInterval = { UsageService.freshness },
+                verifiesLiveIdentity: Bool = false, verifiedLogins: VerifiedClaudeLogins = .shared) {
+        self.verifiesLiveIdentity = verifiesLiveIdentity
+        self.verifiedLogins = verifiedLogins
         self.paths = paths
         self.keychain = keychain
         self.http = http
@@ -111,7 +131,7 @@ public actor UsageService: UsageFetching {
         guard AIAccountPaths.isUsableEmail(email) else { return .failure(.notLoggedIn) }
         // The saved copy of the account the CLI is using now can hold a refresh token the CLI has
         // since rotated; spending it could revoke the live session. Read the live login instead.
-        if let live = liveEmail(provider), live.caseInsensitiveCompare(email) == .orderedSame {
+        if let live = await liveEmail(provider), live.caseInsensitiveCompare(email) == .orderedSame {
             return await activeUsage(provider, force: force)
         }
         return await coalesced(Key(provider: provider, source: .saved(email)), force: force)
@@ -148,7 +168,7 @@ public actor UsageService: UsageFetching {
         } catch {
             return .failure(.keychainUnavailable(error.localizedDescription))
         }
-        let email = key.source.savedEmail ?? claudeLiveEmail()
+        let email = if let saved = key.source.savedEmail { saved } else { await claudeLiveEmail(for: credential) }
         let identity = email?.lowercased() ?? credential.tokenFingerprint
         if let cached = cachedResult(key, fingerprint: credential.tokenFingerprint, force: force) { return cached }
         if let blocked = cooldownResult(key, identity: identity) { return blocked }
@@ -369,15 +389,40 @@ public actor UsageService: UsageFetching {
         }
     }
 
-    private func liveEmail(_ provider: AIProvider) -> String? {
+    private func liveEmail(_ provider: AIProvider) async -> String? {
         switch provider {
-        case .claude: return claudeLiveEmail()
+        case .claude: return await claudeLiveEmail(for: (try? Self.readClaude(.live, paths: paths, keychain: keychain)) ?? nil)
         case .codex: return (try? Self.readCodex(.live, paths: paths, keychain: keychain))?.email
         }
     }
 
+    /// Whose login the Claude CLI holds. An identical saved copy names it exactly, the rule the account
+    /// switcher uses. Once Claude Code has rotated its tokens no copy matches, and then Anthropic's own
+    /// answer decides. `~/.claude.json` is the last resort: the Claude desktop app writes its own account
+    /// there, so it can name a different account than the CLI's keychain login, and then both rows of the
+    /// board would read the same login's usage.
+    private func claudeLiveEmail(for credential: ClaudeCredential?) async -> String? {
+        guard let credential else { return claudeStateEmail() }
+        let fingerprint = credential.tokenFingerprint
+        if let owner = liveOwner, owner.fingerprint == fingerprint,
+           now().timeIntervalSince(owner.at) < Self.liveOwnerLifetime {
+            return owner.email ?? claudeStateEmail()
+        }
+        var resolved = (try? SwitcherConfig.load(from: paths.switcherConfig))?.accounts(for: .claude).first { account in
+            guard let raw = try? keychain.readPassword(service: paths.savedService(.claude, email: account.email), account: nil) else { return false }
+            return ClaudeCredential(json: raw)?.tokenFingerprint == fingerprint
+        }?.email
+        if resolved == nil { resolved = verifiedLogins.email(forFingerprint: fingerprint) }
+        if resolved == nil, verifiesLiveIdentity, case .email(let email) = await ClaudeProfileAPI.answer(credential, http: http) {
+            verifiedLogins.remember(email, forFingerprint: fingerprint)
+            resolved = email
+        }
+        liveOwner = (fingerprint, resolved, now())
+        return resolved ?? claudeStateEmail()
+    }
+
     /// Claude Code rewrites its 200+ KB state file often; parse it only when it actually changed.
-    private func claudeLiveEmail() -> String? {
+    private func claudeStateEmail() -> String? {
         let url = paths.claudeState
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               let modified = attributes[.modificationDate] as? Date,
@@ -392,9 +437,27 @@ public actor UsageService: UsageFetching {
 
     private func cachedResult(_ key: Key, fingerprint: String, force: Bool) -> Result<UsageSnapshot, UsageError>? {
         guard !force, let entry = entries[key], entry.fingerprint == fingerprint,
-              now().timeIntervalSince(entry.attemptedAt) < (entry.followsRefreshInterval ? refreshInterval() : entry.validFor)
+              now().timeIntervalSince(entry.attemptedAt) < lifetime(of: entry)
         else { return nil }
         return entry.result
+    }
+
+    /// How long an entry may be served: its own length for cooldowns and retries, otherwise the chosen
+    /// interval, or what Auto decided when the choice is Auto.
+    private func lifetime(of entry: Entry) -> TimeInterval {
+        guard entry.followsRefreshInterval else { return entry.validFor }
+        let chosen = refreshInterval()
+        return chosen > 0 ? chosen : (entry.autoInterval ?? Self.freshness)
+    }
+
+    /// When the earliest cached figure goes stale, so the open board can ask again at that moment.
+    public func nextRefreshDate() async -> Date? {
+        entries.values.map { $0.attemptedAt.addingTimeInterval(lifetime(of: $0)) }.min()
+    }
+
+    /// ⌘R: Auto starts its ladder again from the shortest wait.
+    public func restartAutoPacing() async {
+        for key in Array(pacers.keys) { pacers[key]?.restart() }
     }
 
     private func cooldownResult(_ key: Key, identity: String) -> Result<UsageSnapshot, UsageError>? {
@@ -422,11 +485,16 @@ public actor UsageService: UsageFetching {
 
     private func remember(_ key: Key, fingerprint: String, identity: String, result: Result<UsageSnapshot, UsageError>) -> Result<UsageSnapshot, UsageError> {
         var good = previousGood(key, identity: identity)
+        var auto: TimeInterval?
         if case .success(let snapshot) = result {
             good = snapshot
             cooldowns[CooldownKey(provider: key.provider, identity: identity)] = nil
+            var pacer = pacers[key] ?? UsageAutoPacer()
+            auto = pacer.observe(snapshot, now: now())
+            pacers[key] = pacer
         }
-        store(key, fingerprint: fingerprint, identity: identity, result: result, validFor: Self.freshness, followsRefreshInterval: true, lastGood: good)
+        store(key, fingerprint: fingerprint, identity: identity, result: result, validFor: Self.freshness,
+              followsRefreshInterval: true, autoInterval: auto, lastGood: good)
         return result
     }
 
@@ -456,9 +524,11 @@ public actor UsageService: UsageFetching {
     }
 
     private func store(_ key: Key, fingerprint: String, identity: String, result: Result<UsageSnapshot, UsageError>,
-                       validFor: TimeInterval, followsRefreshInterval: Bool, lastGood: UsageSnapshot?) {
+                       validFor: TimeInterval, followsRefreshInterval: Bool, autoInterval: TimeInterval? = nil,
+                       lastGood: UsageSnapshot?) {
         entries[key] = Entry(fingerprint: fingerprint, identity: identity, result: result, attemptedAt: now(),
-                             validFor: validFor, followsRefreshInterval: followsRefreshInterval, lastGood: lastGood)
+                             validFor: validFor, followsRefreshInterval: followsRefreshInterval,
+                             autoInterval: autoInterval, lastGood: lastGood)
     }
 
     private func send(_ request: HTTPRequest) async throws -> HTTPResponse {

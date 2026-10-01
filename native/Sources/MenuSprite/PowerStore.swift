@@ -43,7 +43,7 @@ final class PowerStore: ObservableObject {
     // MARK: macOS's own charge limit (see SystemChargeLimit)
     /// PowerUI's manual charge limit exists on this Mac. When it does, the limit, Top Up and
     /// Discharge all run through it; the SMC path remains for firmware that still has keys.
-    let usesSystemLimit = BuildFeatures.privilegedPowerControls && MSPowerUI.isSupported()
+    let usesSystemLimit = MSPowerUI.isSupported()
     /// The limit PowerUI reports, and the policy powerd is actually enforcing.
     @Published private(set) var systemLimit: Int?
     @Published private(set) var enforced: EnforcedChargeLimit?
@@ -54,6 +54,11 @@ final class PowerStore: ObservableObject {
     /// Discharge stopped part-way: hold at this level instead of draining to the limit.
     @Published private(set) var holdLevel: Int?
     @Published private(set) var ledControl = false
+    /// The fan speed MenuSprite should hold, saved; `.automatic` leaves the fans to macOS.
+    /// Re-sent on every helper request, so it returns after a sleep, a relaunch or a helper restart.
+    @Published private(set) var fanTarget = FanTarget.automatic
+    /// A fan change asked for while another command was in flight, sent when it answers.
+    private var fanWriteWaiting = false
     /// Sailing band in percent (0 = an exact limit): no top-up until the level falls this far below the limit.
     @Published private(set) var sailingBand = 5
     private var sailRecharging = false
@@ -83,7 +88,28 @@ final class PowerStore: ObservableObject {
     private var pageOpen: Bool { settingsPageOpen || !batteryObservers.isEmpty }
     private let preferences: UserDefaults
     private var refreshing = false
-    var helperInstalled: Bool { BuildFeatures.privilegedPowerControls && FileManager.default.fileExists(atPath:PowerIdentity.helperPath) }
+    /// Read again on every refresh: the person can turn the helper off in System Settings at any time.
+    @Published private(set) var helperState = PowerHelperState.off
+    var helperInstalled: Bool { helperState == .on || helperState == .legacy }
+    /// Why the helper is not available yet, in the words every surface uses; nil once it is.
+    var helperReason: String? {
+        switch helperState {
+        case .on, .legacy: return nil
+        case .off: return "Power controls are off. Turn them on for any charge limit (macOS alone takes 80–100% in 5% steps), discharge, fan speeds and keep-awake with the lid closed."
+        case .needsApproval: return "Waiting for approval: in System Settings → General → Login Items & Extensions, allow MenuSprite in the background."
+        case .missing: return "This copy of MenuSprite is missing its power helper. Reinstall MenuSprite."
+        }
+    }
+    /// The button that fixes `helperReason`, or nil when there is nothing to press.
+    var helperActionTitle: String? {
+        switch helperState {
+        case .off: return "Turn on power controls…"
+        case .needsApproval: return "Open Login Items…"
+        case .legacy: return "Update power helper…"
+        case .on: return helperOutdated ? "Update power helper…" : nil
+        case .missing: return nil
+        }
+    }
     var canControlBattery: Bool { canRequestBattery && snapshot.helperConnected }
     /// Everything a charge command needs except an already-open connection. launchd starts the
     /// helper on demand, so the menu-bar battery item can offer the control without holding one
@@ -96,7 +122,7 @@ final class PowerStore: ObservableObject {
     /// Gating it on `chargeSupported` hid a control this Mac can actually run.
     var canRequestDischarge: Bool { requestable && snapshot.dischargeSupported }
     var canDischarge: Bool { canRequestDischarge && snapshot.helperConnected }
-    private var requestable: Bool { BuildFeatures.privilegedPowerControls && !busy && helperInstalled && !snapshot.recoveryPending && batteryConflict == nil && snapshot.pluggedIn == true }
+    private var requestable: Bool { !busy && helperInstalled && !snapshot.recoveryPending && batteryConflict == nil && snapshot.pluggedIn == true }
     var batteryControlReason: String? {
         if usesSystemLimit {
             if let batteryConflict { return "Quit \(batteryConflict) so MenuSprite alone sets the charge limit." }
@@ -121,9 +147,8 @@ final class PowerStore: ObservableObject {
             : "Charge control is unavailable on this Mac’s firmware."
     }
     private var commonBatteryReason: String? {
-        if !BuildFeatures.privilegedPowerControls { return "Charge controls are unavailable in this public build." }
         if let batteryConflict { return "Disable \(batteryConflict)’s charge control, then quit it to use MenuSprite." }
-        if !helperInstalled { return "Install MenuSprite’s power helper to enable charge controls." }
+        if let helperReason { return helperReason }
         if snapshot.recoveryPending { return "The power helper needs recovery. Open Power Controls." }
         if snapshot.pluggedIn != true { return "Connect your power adapter to use charge controls." }
         return nil
@@ -141,19 +166,12 @@ final class PowerStore: ObservableObject {
         topUpActive = preferences.bool(forKey:"power.topUp")
         holdLevel = preferences.object(forKey:"power.holdLevel") as? Int
         ledControl = preferences.bool(forKey:"power.magsafeLED")
+        if let percent = preferences.object(forKey:"power.fanPercent") as? Int,
+           FanPolicy.valid(.percent(percent)) { fanTarget = .percent(percent) }
         sailingBand = preferences.object(forKey:"power.sailing") as? Int ?? 5
         sailRecharging = preferences.bool(forKey:"power.sailRecharging")
-        if usesSystemLimit && preferences.object(forKey:"power.saverEnabled") == nil {
-            // First run on the macOS limit: adopt whatever limit is already set rather than
-            // replacing it, so installing this build never undoes a limit that is working.
-            let current = MSPowerUI.currentLimit()
-            if (21..<100).contains(current) {
-                band.upper = current; band.lower = min(band.lower, current - 1)
-                saverEnabled = true
-                preferences.set(try? JSONEncoder().encode(band),forKey:"power.chargeBand")
-            }
-            preferences.set(saverEnabled, forKey:"power.saverEnabled")
-        }
+        helperState = PowerHelperInstall.state()
+        adoptSystemLimitOnce()
         keepDisplay = preferences.bool(forKey:"power.keepDisplay")
         duration = preferences.object(forKey:"power.duration") as? Double ?? 0
         awakeIcon = preferences.string(forKey:"power.awakeIcon").flatMap(AwakeIcon.init(rawValue:)) ?? .menuSprite
@@ -204,9 +222,32 @@ final class PowerStore: ObservableObject {
         refreshLocal()
         resumeSaverIfPossible()
         reconcileLimit()
-        if ledControl { send(.init(.status)) }
+        if ledControl || fanTarget.isManual { send(.init(.status)) }
     }
-    func opened() { settingsPageOpen = true; refresh() }
+    /// First run on the macOS limit with the helper on: adopt whatever limit is already set rather than
+    /// replacing it, so installing this build never undoes a limit that is working. Without the helper
+    /// it waits: a public user who set 80% in System Settings and never opens power controls must find
+    /// MenuSprite has written nothing (sailing would otherwise start moving that limit at launch).
+    private func adoptSystemLimitOnce() {
+        guard usesSystemLimit, helperInstalled, preferences.object(forKey:"power.saverEnabled") == nil else { return }
+        let current = MSPowerUI.currentLimit()
+        if (21..<100).contains(current) {
+            band.upper = current; band.lower = min(band.lower, current - 1)
+            saverEnabled = true
+            preferences.set(try? JSONEncoder().encode(band),forKey:"power.chargeBand")
+        }
+        preferences.set(saverEnabled, forKey:"power.saverEnabled")
+    }
+    /// Each status read is a round trip to macOS's background-task database with signature checks, and
+    /// refreshLocal runs on every power event and dashboard tick: ask at most every 30 s unless forced.
+    private var helperCheckedAt = Date.distantPast
+    private func updateHelperState(force: Bool = false) {
+        guard force || Date().timeIntervalSince(helperCheckedAt) > 30 else { return }
+        helperCheckedAt = Date()
+        let state = PowerHelperInstall.state()
+        if state != helperState { helperState = state }
+    }
+    func opened() { settingsPageOpen = true; updateHelperState(force: true); refresh() }
     func closed() { settingsPageOpen = false; disconnectIfIdle() }
     func observeBattery(_ id: UUID) { batteryObservers.insert(id); refreshBatteryStatus() }
     func stopObservingBattery(_ id: UUID) { batteryObservers.remove(id); disconnectIfIdle() }
@@ -250,7 +291,8 @@ final class PowerStore: ObservableObject {
             let name = app.localizedName ?? ""
             return name.localizedCaseInsensitiveContains("AlDente") || name == "batt" || name == "BatteryKid"
         }?.localizedName
-        if !helperInstalled { helperStatus = "Not installed · administrator approval required"; snapshot.helperConnected = false }
+        updateHelperState()
+        if !helperInstalled { helperStatus = helperState == .needsApproval ? "Waiting for approval in System Settings" : (helperState == .missing ? "Missing from this copy of MenuSprite" : "Off"); snapshot.helperConnected = false }
     }
     private func event() {
         refreshLocal(); reconcileAwake()
@@ -258,7 +300,7 @@ final class PowerStore: ObservableObject {
         if snapshot.pluggedIn != true { lastSaverAttempt = nil }
         reconcileLimit()
         // macOS holds its own limit, so only the SMC path and the LED need the helper polled.
-        if helperInstalled && (pageOpen || ledControl || (saverEnabled && !usesSystemLimit)) { send(.init(.status)) }
+        if helperInstalled && (pageOpen || ledControl || fanTarget.isManual || (saverEnabled && !usesSystemLimit)) { send(.init(.status)) }
     }
     func settingsChanged() {
         preferences.set(try? JSONEncoder().encode(band),forKey:"power.chargeBand")
@@ -447,7 +489,7 @@ final class PowerStore: ObservableObject {
         }
         let allowed = mode == .discharge ? canRequestDischarge : canRequestBattery
         let reason = mode == .discharge ? dischargeReason : batteryRequestReason
-        guard allowed, band.valid else { notice = reason ?? "Install the helper, connect power and turn off the other battery controller first."; return }
+        guard allowed, band.valid else { notice = reason ?? "Turn on power controls, connect power and turn off the other battery controller first."; return }
         settingsChanged(); send(.init(.battery,mode:mode,band:band))
     }
     func stopBattery() { send(.init(.stopBattery)) }
@@ -456,9 +498,38 @@ final class PowerStore: ObservableObject {
     var lowPowerEnabled: Bool { ProcessInfo.processInfo.isLowPowerModeEnabled }
     /// The installed helper rejected a command this build sends: it needs reinstalling.
     private(set) var helperOutdated = false
+    // MARK: Fans
+    /// Why the fans cannot be controlled from here, or nil when they can.
+    var fanControlReason: String? {
+        if !helperInstalled { return helperState == .off ? "Power controls are off. Turn them on to control the fans." : helperReason }
+        if helperOutdated { return Self.outdatedText }
+        return nil
+    }
+    /// Holds every fan at a percentage of its maximum, or hands them back to macOS.
+    func setFans(_ target: FanTarget) {
+        guard FanPolicy.valid(target) else { return }
+        guard fanControlReason == nil || helperOutdated else { notice = fanControlReason; NSSound.beep(); return }
+        fanTarget = target
+        preferences.set(target.percent, forKey:"power.fanPercent")
+        if busy { fanWriteWaiting = true; return }
+        send(.init(.fans))
+    }
+    /// Off-screen renders only: show a fan state without sending anything.
+    func previewFans(_ target: FanTarget, held: Bool) {
+        guard Self.offline else { return }
+        fanTarget = target; snapshot.helperConnected = true; snapshot.fanTarget = held ? target : .automatic
+    }
+    /// What the helper reports it is actually holding, which can differ from what was asked.
+    var fanStatus: String {
+        if let reason = fanControlReason { return reason }
+        guard let percent = fanTarget.percent else { return "macOS is managing the fans" }
+        if snapshot.helperConnected && snapshot.fanTarget == nil { return Self.outdatedText }
+        guard snapshot.fanTarget == fanTarget else { return snapshot.error.map { "Not applied · \($0)" } ?? "Applying…" }
+        return percent == 100 ? "Full blast · until you choose Automatic" : "Held at \(percent)% · until you choose Automatic"
+    }
     func toggleLowPower() {
-        guard BuildFeatures.privilegedPowerControls, helperInstalled else {
-            notice = "Low Power Mode is switched through the power helper, which is not installed."
+        guard helperInstalled else {
+            notice = "Low Power Mode is switched through MenuSprite’s power helper. Turn on power controls first."
             NSSound.beep(); return
         }
         send(.init(.lowPower, lowPower: !lowPowerEnabled))
@@ -473,7 +544,9 @@ final class PowerStore: ObservableObject {
     // MARK: macOS charge limit
 
     /// The level macOS should hold right now.
-    var desiredSystemLimit: Int { topUpActive ? 100 : (holdLevel ?? sailTarget.limit) }
+    /// Without the helper macOS takes only its own 80–100% steps, so sailing and holds (which pick
+    /// arbitrary levels) apply only with it; otherwise the target is exactly the chosen limit.
+    var desiredSystemLimit: Int { topUpActive ? 100 : (helperInstalled ? (holdLevel ?? sailTarget.limit) : band.upper) }
     private var sailTarget: (limit: Int, recharging: Bool) {
         Sailing.target(limit: band.upper, band: sailingBand, percent: snapshot.percent, recharging: sailRecharging)
     }
@@ -596,7 +669,7 @@ final class PowerStore: ObservableObject {
             notice = nil; checkLimitSoon(); return
         }
         guard helperInstalled else {
-            notice = "macOS accepts only 80–100% in 5% steps without MenuSprite’s power helper. Install it for \(value)%."
+            notice = "macOS accepts only 80–100% in 5% steps on its own. Turn on power controls for \(value)%."
             return
         }
         // At 100 PowerUIAgent's limit is off and it ignores the stored preference, and turning it
@@ -637,7 +710,7 @@ final class PowerStore: ObservableObject {
             guard let self else { return }
             self.readLimitState()
             if self.saverEnabled, self.systemLimit != self.desiredSystemLimit {
-                self.notice = "macOS did not take \(self.desiredSystemLimit)% (it reports \(self.systemLimit.map { "\($0)%" } ?? "no limit")). Reinstall the power helper if this persists."
+                self.notice = "macOS did not take \(self.desiredSystemLimit)% (it reports \(self.systemLimit.map { "\($0)%" } ?? "no limit")). Turn power controls off and on again in Power Controls if this persists."
             }
             for delay in [6.0, 14.0] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in MainActor.assumeIsolated { self?.readLimitState() } }
@@ -656,18 +729,26 @@ final class PowerStore: ObservableObject {
         let c = NSXPCConnection(machServiceName:PowerIdentity.service,options:.privileged)
         c.setCodeSigningRequirement(PowerIdentity.helperRequirement)
         c.remoteObjectInterface = NSXPCInterface(with:PowerHelperProtocol.self)
-        c.invalidationHandler = { @Sendable [weak self] in Task { @MainActor in self?.connection = nil; self?.snapshot.helperConnected = false } }
+        let id = ObjectIdentifier(c)
+        c.invalidationHandler = { @Sendable [weak self] in Task { @MainActor in
+            // Only the connection this handler belongs to: a newer one may already have replaced it.
+            guard let self, self.connection.map(ObjectIdentifier.init) ?? id == id else { return }
+            self.connection = nil; self.snapshot.helperConnected = false
+        } }
         c.interruptionHandler = { @Sendable [weak self] in Task { @MainActor in self?.snapshot.helperConnected = false; self?.helperStatus = "Helper connection interrupted; recovery runs in the helper" } }
         c.resume(); connection = c; return c
     }
+    /// Set by the off-screen render harnesses: nothing may reach the helper (a saved fan speed would apply).
+    static var offline = false
     private func send(_ request: PowerRequest) {
-        guard BuildFeatures.privilegedPowerControls else { return }
-        guard helperInstalled else { helperStatus = "Not installed · administrator approval required"; return }
+        guard !Self.offline else { return }
+        guard helperInstalled else { return }
         guard !refreshing || request.action != .status else { return }
         var request = request
         request.led = ledControl
+        request.fans = fanTarget
         let wroteLimit = request.action == .chargeLimit
-        let switchedLowPower = request.action == .lowPower
+        let switchedLowPower = request.action == .lowPower || request.action == .fans
         let isCommand = request.action != .status && request.action != .heartbeat
         if isCommand {
             // A limit asked for mid-command is not dropped: the latest target is re-applied
@@ -684,6 +765,10 @@ final class PowerStore: ObservableObject {
         guard let data = try? JSONEncoder().encode(request) else { refreshing = false; if isCommand { busy = false }; return }
         proxy?.perform(data) { @Sendable [weak self] data in Task { @MainActor in
             guard let self else { return }; self.refreshing = false; if isCommand { self.busy = false }
+            if isCommand && self.fanWriteWaiting {
+                self.fanWriteWaiting = false
+                DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.send(.init(.fans)) } }
+            }
             if isCommand && self.limitWriteWaiting {
                 self.limitWriteWaiting = false
                 DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.reconcileLimit(force: true) } }
@@ -694,10 +779,10 @@ final class PowerStore: ObservableObject {
             // A helper older than this build rejects commands it does not know.
             if switchedLowPower { self.helperOutdated = response.error == "Invalid request" }
             self.notice = response.error == "Invalid request" && isCommand
-                ? "The power helper predates this control. Reinstall it (Copy helper install command), then try again."
+                ? Self.outdatedText
                 : response.error
             if isCommand, response.error != nil { NSSound.beep() }
-            if response.mode != .off || response.lidActive || response.ledControl == true {
+            if response.mode != .off || response.lidActive || response.ledControl == true || response.fanTarget?.isManual == true {
                 if self.heartbeat == nil {
                     self.heartbeat = Timer.scheduledTimer(withTimeInterval:20,repeats:true) { [weak self] _ in MainActor.assumeIsolated { self?.send(.init(.heartbeat)) } }
                     self.heartbeat?.tolerance = 2
@@ -711,16 +796,76 @@ final class PowerStore: ObservableObject {
         }}
     }
     private func disconnectIfIdle() {
-        if !pageOpen && snapshot.mode == .off && !snapshot.lidActive && !ledControl { connection?.invalidate(); connection = nil; snapshot.helperConnected = false }
+        if !pageOpen && snapshot.mode == .off && !snapshot.lidActive && !ledControl && !fanTarget.isManual { connection?.invalidate(); connection = nil; snapshot.helperConnected = false }
     }
-    func revealInstaller() {
-        if let url = Bundle.main.url(forResource:"install-power-helper",withExtension:"sh") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+    /// The helper rejected a command this build sends. The bundled helper is replaced with the app, so
+    /// only the old Terminal-installed one, or an old process still running after an update, does this.
+    static let outdatedText = "The power helper is older than this MenuSprite. Choose Update power helper, or quit and reopen MenuSprite."
+    // MARK: Turning the helper on and off
+    private var approvalDeadline: Date?
+    private var approvalTimer: Timer?
+    /// Registers the bundled helper, moving the old Terminal-installed one out of the way first.
+    /// Only ever called from a click: launching MenuSprite never registers or prompts.
+    func enableHelper() {
+        if helperState == .needsApproval { PowerHelperInstall.openApproval(); waitForApproval(); return }
+        if helperState == .on {
+            // An old helper process outlived an app update. Letting go makes it hand back and exit
+            // (main.swift), and launchd starts the bundled one on the next request.
+            guard helperOutdated else { refresh(); return }
+            connection?.invalidate(); connection = nil; snapshot.helperConnected = false; helperOutdated = false
+            // It exits 10 s after losing its connection (main.swift); reconnecting sooner would keep it.
+            notice = "Restarting the power helper…"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in MainActor.assumeIsolated { self?.helperBecameAvailable() } }
+            return
+        }
+        if helperState == .legacy {
+            // The old helper restores everything when its one connection goes; the new one is re-sent
+            // the saved fan speed and limit once it answers.
+            connection?.invalidate(); connection = nil; snapshot.helperConnected = false
+            do { try PowerHelperInstall.removeLegacy() }
+            catch { notice = error.localizedDescription; updateHelperState(force: true); refreshLocal(); return }
+            helperOutdated = false
+        }
+        do { helperState = try PowerHelperInstall.enable() }
+        catch { notice = "macOS did not register the power helper: \(error.localizedDescription)"; updateHelperState(force: true); refreshLocal(); return }
+        if helperState == .needsApproval {
+            PowerHelperInstall.openApproval()
+            notice = "In System Settings, allow MenuSprite under “Allow in the Background” (macOS asks for your password). MenuSprite notices by itself."
+            waitForApproval()
+        } else { helperBecameAvailable() }
     }
-    func copyInstallCommand() {
-        guard let url = Bundle.main.url(forResource:"install-power-helper",withExtension:"sh") else { return }
-        let quoted = "'" + url.path.replacingOccurrences(of:"'",with:"'\\''") + "'"
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString("sudo /bin/bash \(quoted)",forType:.string)
-        notice = "Install command copied. Run it in Terminal; macOS needs your administrator password. Then click Refresh."
+    /// Polled only while the person is on their way through System Settings, for at most five minutes.
+    private func waitForApproval() {
+        approvalDeadline = Date().addingTimeInterval(300)
+        guard approvalTimer == nil else { return }
+        approvalTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in MainActor.assumeIsolated {
+            guard let self else { return }
+            self.updateHelperState(force: true); self.refreshLocal()
+            if self.helperState == .on { self.stopWaitingForApproval(); self.helperBecameAvailable() }
+            else if self.helperState != .needsApproval || Date() > (self.approvalDeadline ?? .distantPast) { self.stopWaitingForApproval() }
+        }}
+    }
+    private func stopWaitingForApproval() { approvalTimer?.invalidate(); approvalTimer = nil; approvalDeadline = nil }
+    private func helperBecameAvailable() {
+        notice = nil; helperCapability = nil
+        adoptSystemLimitOnce()
+        refresh()
+        resumeSaverIfPossible(); reconcileLimit(force: true)
+    }
+    /// Hands everything back and unregisters. The saved choices stay for the next time it is turned on.
+    func disableHelper() {
+        guard helperState == .on || helperState == .needsApproval else { return }
+        heartbeat?.invalidate(); heartbeat = nil
+        connection?.invalidate(); connection = nil; snapshot.helperConnected = false
+        // The helper hands the fans back when it goes; a saved manual speed must not return by itself
+        // the next time power controls are turned on.
+        fanTarget = .automatic; preferences.removeObject(forKey:"power.fanPercent")
+        Task { @MainActor in
+            do { try await PowerHelperInstall.disable() } catch { notice = "macOS did not turn the power helper off: \(error.localizedDescription)" }
+            stopWaitingForApproval(); helperCapability = nil; updateHelperState(force: true)
+            snapshot.mode = .off; snapshot.lidActive = false; snapshot.fanTarget = nil
+            refreshLocal()
+        }
     }
     func shutdown() {
         expiry?.cancel(); heartbeat?.invalidate(); releaseAssertions()

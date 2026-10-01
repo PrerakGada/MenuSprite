@@ -8,9 +8,7 @@ output="$2"
 [[ "$app_path" == */MenuSprite.app && "$output" == *.dmg && ! -e "$output" ]] || { echo 'Expected MenuSprite.app and a new .dmg output path.' >&2; exit 1; }
 codesign --verify --strict -R '=anchor apple generic and identifier "in.prerakgada.MenuSprite" and certificate leaf[subject.OU] = "RC63N3VU27" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' "$app_path"
 xcrun stapler validate "$app_path"
-if [[ -e "$app_path/Contents/Resources/MenuSpritePowerHelper" ]] || compgen -G "$app_path/Contents/Resources/*power-helper.sh" >/dev/null; then
-    echo 'Privileged tooling found; refusing public packaging.' >&2; exit 1
-fi
+"$repo_root/scripts/verify-power-helper.sh" "$app_path" --developer-id
 [[ "$(lipo -archs "$app_path/Contents/MacOS/MenuSprite")" == 'arm64' ]] || { echo 'The public preview requires arm64.' >&2; exit 1; }
 tool_root="$repo_root/native/.build/dmg-tools"
 if [[ ! -x "$tool_root/bin/dmgbuild" ]]; then

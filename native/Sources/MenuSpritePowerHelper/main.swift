@@ -32,6 +32,11 @@ private final class Server: NSObject, NSXPCListenerDelegate {
             guard let self else { return }
             do { try self.controller.restoreAll() } catch { self.controller.lastError = error.localizedDescription }
             self.controller.schedule(); self.ownershipLock.lock(); self.owner = nil; self.ownershipLock.unlock()
+            // launchd starts the helper on demand, and it runs from inside the app bundle: leave soon after
+            // MenuSprite lets go, so an app update or reinstall rarely meets a running old helper. Not sooner
+            // than 10 s: launchd throttles a job that lived less than its ThrottleInterval, and a quick
+            // reopen of the hub would then wait seconds for its status.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { exitIfIdle() }
         }}
         connection.resume(); return true
     }
@@ -68,9 +73,19 @@ if let port, let source = IONotificationPortGetRunLoopSource(port)?.takeUnretain
 if let source = IOPSNotificationCreateRunLoopSource({ _ in
     DispatchQueue.main.async { if server.controller.ledControl { server.controller.updateLED() } }
 }, nil)?.takeRetainedValue() { CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode) }
-let idleTimer = Timer.scheduledTimer(withTimeInterval:120,repeats:true) { _ in
+func exitIfIdle() {
     if !server.hasOwner && !server.controller.active && !server.controller.needsRecovery { exit(0) }
 }
+let idleTimer = Timer.scheduledTimer(withTimeInterval:120,repeats:true) { _ in exitIfIdle() }
 idleTimer.tolerance = 15
+// launchd sends SIGTERM when the service is turned off in System Settings, unregistered or booted out:
+// hand everything back before going, as a lost app connection does.
+signal(SIGTERM, SIG_IGN)
+let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+termination.setEventHandler {
+    do { try server.controller.restoreAll(); exit(0) }
+    catch { fputs("Recovery failed: \(error.localizedDescription)\n",stderr); exit(1) }
+}
+termination.resume()
 listener.resume()
 RunLoop.main.run()

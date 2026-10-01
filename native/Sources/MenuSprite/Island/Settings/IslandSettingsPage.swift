@@ -3,19 +3,16 @@ import Combine
 import IslandKit
 import SwiftUI
 
-/// Settings › Dynamic Island in its own window: the master switch, then Layout, Content, Activity and
-/// Behavior. MenuSprite has no sidebar settings app, so the editor is a window of its own, opened from
-/// the app menu, the brand icon's menu and the island's Settings button. The window and its views are
-/// released on close; the small model survives so the tab and selection come back.
+/// Settings › Dynamic Island, the Island page of MenuSprite's window: the master switch, then Layout,
+/// Content, Activity and Behavior. The page's views are released when another page is chosen or the
+/// window closes; the small model survives so the tab and selection come back.
 @MainActor
-final class IslandSettingsWindowController: NSObject, NSWindowDelegate {
-    private static let autosaveName = "DynamicIslandSettings"
+final class IslandSettingsPage {
     private nonisolated static let otherIslandApp = "com.vorssaint.utils"
 
     private let environment: IslandEnvironment
     private let island: IslandController
     let model: IslandSettingsModel
-    private var window: NSWindow?
     private var workspaceObservers: [NSObjectProtocol] = []
 
     init(environment: IslandEnvironment, island: IslandController) {
@@ -24,67 +21,41 @@ final class IslandSettingsWindowController: NSObject, NSWindowDelegate {
         model = IslandSettingsModel(environment: environment)
     }
 
-    var isVisible: Bool { window?.isVisible == true }
-
-    /// Brings the window forward; a section selects it on the Content tab.
-    func show(section: IslandSectionID? = nil) {
-        if let section { model.reveal(section) }
-        let window = self.window ?? makeWindow()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        model.windowVisible = !window.isMiniaturized
-        refreshChecks()
-    }
-
-    func close() { window?.close() }
-
-    /// The window's content, also used by the render harness in a window that is never shown.
+    /// The page's content, also used by the render harness in a window that is never shown.
     static func rootView(model: IslandSettingsModel, environment: IslandEnvironment, island: IslandController) -> some View {
         IslandSettingsView(model: model, settings: environment.settingsStore, environment: environment,
                            presentation: island.presentation, open: { [weak island] in island?.open(nil, explicit: true) })
     }
 
-    private func makeWindow() -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 820),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "MenuSprite — Dynamic Island"
-        window.isReleasedWhenClosed = false
-        window.contentMinSize = NSSize(width: 820, height: 640)
-        window.delegate = self
-        window.contentView = NSHostingView(rootView: Self.rootView(model: model, environment: environment, island: island))
-        if !window.setFrameUsingName(Self.autosaveName) { window.center() }
-        window.setFrameAutosaveName(Self.autosaveName)
-        self.window = window
+    /// Builds the page each time the Island tab is chosen.
+    func makeView() -> NSView {
         observeOtherIsland()
-        return window
+        refreshChecks()
+        let host = NSHostingView(rootView: Self.rootView(model: model, environment: environment, island: island)
+            .frame(minWidth: 820, minHeight: 640))
+        host.sizingOptions = [.minSize]
+        return host
     }
 
-    func windowWillClose(_ notification: Notification) {
-        guard notification.object as? NSWindow === window else { return }
+    /// The System preview samples only while the page can be seen.
+    func visibilityChanged(_ visible: Bool) { model.windowVisible = visible }
+
+    func closed() {
         model.windowVisible = false
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         workspaceObservers = []
-        window?.contentView = nil
-        window?.delegate = nil
-        window = nil
     }
-
-    func windowDidChangeOcclusionState(_ notification: Notification) {
-        guard let window, notification.object as? NSWindow === window else { return }
-        model.windowVisible = window.occlusionState.contains(.visible) && !window.isMiniaturized
-    }
-
-    func windowDidBecomeKey(_ notification: Notification) { refreshChecks() }
 
     // MARK: Read-only checks
 
-    /// Accessibility is only checked here; the Permissions window is where it is granted.
-    private func refreshChecks() {
+    /// Accessibility is only checked here; the Access page is where it is granted.
+    func refreshChecks() {
         model.accessibilityTrusted = AXIsProcessTrusted()
         refreshOtherIsland()
     }
 
     private func observeOtherIsland() {
+        guard workspaceObservers.isEmpty else { return }
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
@@ -110,9 +81,9 @@ final class IslandSettingsWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-/// What the settings window shows: tab, selected section and the read-only checks. It also decides
+/// What the Island page shows: tab, selected section and the read-only checks. It also decides
 /// when the System page's preview may sample: only on the Content tab, with System selected, while the
-/// window is visible.
+/// page is visible.
 @MainActor
 final class IslandSettingsModel: ObservableObject {
     @Published var tab: IslandSettingsTab = .layout { didSet { syncSampling() } }

@@ -143,17 +143,10 @@ public enum PermissionCatalog {
               hasSettings: false, usedBy: powerHelperUse, isOtherAccess: true)
     ]
 
-    #if MENUSPRITE_PUBLIC_PREVIEW
-    private static let powerHelperUse = "Not used by MenuSprite"
-    private static let helperExplanation = "No privileged helper is bundled with this public preview. Monitoring and ordinary keep-awake run without one."
-    private static let adminExplanation = "This public preview performs no administrator-authorized operations. macOS has no permanent global Administrator grant for an app."
-    private static let hardwareExplanation = "Hardware controls are excluded from this public preview. Fan, temperature and power readings are read-only and are not generic privacy grants."
-    #else
-    private static let powerHelperUse = "Battery and closed-lid controls (optional)"
-    private static let helperExplanation = "The signed MenuSprite power helper is bundled for battery and closed-lid controls. Installation is separate from feature activation; Power Controls verifies its live connection."
-    private static let adminExplanation = "Installing or removing the dedicated power helper needs administrator authorization. macOS has no permanent global Administrator grant for this app."
-    private static let hardwareExplanation = "The power helper implements supported charge and adapter controls. Capability is checked on Power Controls and remains separate from activation. No fan control is implemented. These are not generic macOS privacy grants."
-    #endif
+    private static let powerHelperUse = "Charge limit, discharge, fans and closed-lid mode (optional)"
+    private static let helperExplanation = "MenuSprite carries a signed power helper inside the app. It runs only after you turn on power controls and allow it under Login Items & Extensions, and Power Controls verifies its live connection."
+    private static let adminExplanation = "Allowing the power helper in System Settings asks for an administrator password once. macOS has no permanent global Administrator grant for this app."
+    private static let hardwareExplanation = "The power helper implements charge, adapter and fan controls on the keys this Mac's firmware publishes as writable. Capability is checked on Power Controls. These are not generic macOS privacy grants."
 
     public static var groups: [String] {
         all.reduce(into: []) { if !$0.contains($1.group) { $0.append($1.group) } }
