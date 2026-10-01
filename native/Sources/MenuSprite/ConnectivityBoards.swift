@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreBluetooth
 import CoreLocation
 import SwiftUI
@@ -29,11 +30,96 @@ extension SpriteConfiguration {
     }
 }
 
+/// Location (for Wi-Fi names) and Bluetooth permission requests. One object for the whole app, so a
+/// request outlives the board that started it: a popover can close while macOS's prompt is up.
+///
+/// macOS shows a location prompt only for an app in front, and MenuSprite lives in the menu bar, so it is
+/// brought forward before asking. If macOS still shows nothing, the board says so and offers Settings
+/// instead of a button that silently does nothing.
+@MainActor
+final class ConnectivityAccess: NSObject, ObservableObject, CLLocationManagerDelegate, CBCentralManagerDelegate {
+    static let shared = ConnectivityAccess()
+
+    @Published private(set) var location: CLAuthorizationStatus
+    @Published private(set) var bluetooth: BluetoothAccess
+    /// A request is out and macOS has not answered yet.
+    @Published private(set) var askingLocation = false
+    @Published private(set) var askingBluetooth = false
+    /// macOS showed no prompt within a few seconds of asking.
+    @Published private(set) var locationUnanswered = false
+    @Published private(set) var bluetoothUnanswered = false
+
+    private let manager = CLLocationManager()
+    /// Creating it is what asks for Bluetooth; kept until macOS has an answer.
+    private var central: CBCentralManager?
+
+    private override init() {
+        location = manager.authorizationStatus
+        bluetooth = ConnectivityReader.bluetoothAccess
+        super.init()
+        manager.delegate = self
+    }
+
+    var locationAllowed: Bool { location == .authorizedAlways || location == .authorized }
+
+    func requestLocation() {
+        guard location == .notDetermined else {
+            ConnectivityMonitor.openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")
+            return
+        }
+        askingLocation = true; locationUnanswered = false
+        NSApp.activate(ignoringOtherApps: true)
+        manager.requestWhenInUseAuthorization()
+        Task {
+            // macOS treats both requests alike on the Mac, but has been seen to answer only the second.
+            try? await Task.sleep(for: .seconds(2))
+            if location == .notDetermined { manager.requestAlwaysAuthorization() }
+            try? await Task.sleep(for: .seconds(6))
+            if location == .notDetermined { locationUnanswered = true }
+            askingLocation = false
+        }
+    }
+
+    func requestBluetooth() {
+        bluetooth = ConnectivityReader.bluetoothAccess
+        guard bluetooth == .notDetermined else {
+            if bluetooth == .denied { ConnectivityMonitor.openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth") }
+            return
+        }
+        askingBluetooth = true; bluetoothUnanswered = false
+        NSApp.activate(ignoringOtherApps: true)
+        if central == nil { central = CBCentralManager(delegate: self, queue: .main) }
+        Task {
+            try? await Task.sleep(for: .seconds(8))
+            if ConnectivityReader.bluetoothAccess == .notDetermined { bluetoothUnanswered = true }
+            askingBluetooth = false
+        }
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        MainActor.assumeIsolated {
+            location = status
+            if status != .notDetermined { askingLocation = false; locationUnanswered = false }
+        }
+    }
+
+    nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        MainActor.assumeIsolated {
+            bluetooth = ConnectivityReader.bluetoothAccess
+            // The manager is only there to ask: let it go once macOS has answered, never before.
+            guard bluetooth != .notDetermined else { return }
+            askingBluetooth = false; bluetoothUnanswered = false
+            self.central?.delegate = nil; self.central = nil
+        }
+    }
+}
+
 /// The boards' live view of Wi-Fi and Bluetooth, read only while a board is open: every two seconds for
 /// Wi-Fi, three for Bluetooth. Reads and changes run off the main thread (a scan or a connect blocks for
 /// seconds); results come back here.
 @MainActor
-final class ConnectivityMonitor: NSObject, ObservableObject, CLLocationManagerDelegate, CBCentralManagerDelegate {
+final class ConnectivityMonitor: ObservableObject {
     @Published private(set) var wifi: WiFiSnapshot?
     @Published private(set) var bluetooth: BluetoothSnapshot?
     @Published private(set) var networks: [WiFiNetwork] = []
@@ -42,24 +128,24 @@ final class ConnectivityMonitor: NSObject, ObservableObject, CLLocationManagerDe
     /// Device addresses (or network names) with a change in flight.
     @Published private(set) var busy: Set<String> = []
     @Published var notice: String?
-    @Published private(set) var location: CLAuthorizationStatus = .notDetermined
 
     private var kind: ConnectivityBoardKind = .wifi
     private var timer: Timer?
-    private var locationManager: CLLocationManager?
-    /// Held only while the Bluetooth permission prompt is up; creating it is what asks.
-    private var central: CBCentralManager?
+    private var accessWatch: AnyCancellable?
 
     func start(_ kind: ConnectivityBoardKind) {
         self.kind = kind
-        if kind == .wifi {
-            let manager = CLLocationManager()
-            manager.delegate = self
-            locationManager = manager
-            location = manager.authorizationStatus
-        }
+        let access = ConnectivityAccess.shared
         refresh()
-        if kind == .wifi, locationAllowed { scan() }
+        if kind == .wifi, access.locationAllowed { scan() }
+        // A grant arrives while the board is open: read again at once (and list networks, now named).
+        accessWatch = access.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.refresh()
+                if self.kind == .wifi, access.locationAllowed, !self.scanned { self.scan() }
+            }
+        }
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: kind == .wifi ? 2 : 3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
@@ -69,7 +155,7 @@ final class ConnectivityMonitor: NSObject, ObservableObject, CLLocationManagerDe
 
     func stop() {
         timer?.invalidate(); timer = nil
-        locationManager?.delegate = nil; locationManager = nil
+        accessWatch = nil
     }
 
     func refresh() {
@@ -82,8 +168,6 @@ final class ConnectivityMonitor: NSObject, ObservableObject, CLLocationManagerDe
     }
 
     // MARK: Wi-Fi
-
-    var locationAllowed: Bool { location == .authorizedAlways || location == .authorized }
 
     func setWiFiPower(_ on: Bool) {
         perform("wifi-power", failure: on ? "Could not turn Wi-Fi on" : "Could not turn Wi-Fi off") { try ConnectivityReader.setWiFiPower(on) }
@@ -104,38 +188,6 @@ final class ConnectivityMonitor: NSObject, ObservableObject, CLLocationManagerDe
 
     func join(_ name: String) {
         perform(name, failure: "Could not join “\(name)”") { try ConnectivityReader.join(name) }
-    }
-
-    func requestLocation() {
-        if location == .notDetermined { locationManager?.requestWhenInUseAuthorization() }
-        else { Self.openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices") }
-    }
-
-    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        let status = manager.authorizationStatus
-        MainActor.assumeIsolated {
-            location = status
-            refresh()
-            if locationAllowed { scan() }
-        }
-    }
-
-    // MARK: Bluetooth
-
-    func requestBluetooth() {
-        switch ConnectivityReader.bluetoothAccess {
-        case .notDetermined: central = CBCentralManager(delegate: self, queue: .main)
-        case .denied: Self.openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth")
-        case .allowed: refresh()
-        }
-    }
-
-    nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        MainActor.assumeIsolated {
-            // The answer is in; the manager was only there to ask.
-            self.central?.delegate = nil; self.central = nil
-            refresh()
-        }
     }
 
     func setBluetoothPower(_ on: Bool) {
@@ -177,6 +229,32 @@ struct WiFiBoard: View {
     let id: UUID
     let configure: () -> Void
     @StateObject private var monitor = ConnectivityMonitor()
+    @ObservedObject private var access = ConnectivityAccess.shared
+
+    /// Why the name is hidden and what to do: ask, wait for macOS, or go to Settings when it showed no prompt.
+    @ViewBuilder private var locationRow: some View {
+        let text: String = if access.askingLocation {
+            "Waiting for macOS to ask you about Location…"
+        } else if access.locationUnanswered {
+            "macOS showed no prompt. Turn on MenuSprite in Privacy & Security › Location Services, then reopen this board."
+        } else if access.location == .notDetermined {
+            "macOS shows network names only to apps with Location access. MenuSprite never reads where you are."
+        } else {
+            "Location access is off for MenuSprite, so macOS hides network names. Turn it on in Privacy & Security › Location Services."
+        }
+        HStack(alignment: .firstTextBaseline) {
+            Text(text).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if access.askingLocation {
+                ProgressView().controlSize(.mini)
+            } else {
+                Button(access.location == .notDetermined && !access.locationUnanswered ? "Allow…" : "Settings…") {
+                    if access.locationUnanswered {
+                        ConnectivityMonitor.openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")
+                    } else { access.requestLocation() }
+                }.controlSize(.small)
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -232,15 +310,7 @@ struct WiFiBoard: View {
             }
             Spacer(minLength: 0)
         }
-        if wifi.network == nil {
-            HStack(alignment: .firstTextBaseline) {
-                Text(monitor.location == .notDetermined
-                     ? "macOS shows network names only to apps with Location access. MenuSprite never reads where you are."
-                     : "Location access is off for MenuSprite, so macOS hides network names.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Button(monitor.location == .notDetermined ? "Allow…" : "Settings…") { monitor.requestLocation() }.controlSize(.small)
-            }
-        }
+        if wifi.network == nil { locationRow }
         Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
             fact("Link rate", wifi.linkRate.map { "\(Int($0)) Mb/s" })
             fact("Band", [wifi.band?.rawValue, wifi.channel.map { "channel \($0)" }, wifi.channelWidth.map { "\($0) MHz" }]
@@ -280,9 +350,9 @@ struct WiFiBoard: View {
             Spacer()
             if monitor.scanning { ProgressView().controlSize(.mini) }
             Button(monitor.scanned ? "Scan again" : "Scan") { monitor.scan() }
-                .controlSize(.small).disabled(monitor.scanning || !monitor.locationAllowed)
+                .controlSize(.small).disabled(monitor.scanning || !access.locationAllowed)
         }
-        if !monitor.locationAllowed {
+        if !access.locationAllowed {
             Text("The list needs Location access too: macOS hides every network's name without it.")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         } else if monitor.scanned && monitor.networks.isEmpty && !monitor.scanning {
@@ -326,6 +396,7 @@ struct BluetoothBoard: View {
     let id: UUID
     let configure: () -> Void
     @StateObject private var monitor = ConnectivityMonitor()
+    @ObservedObject private var access = ConnectivityAccess.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -369,10 +440,21 @@ struct BluetoothBoard: View {
         .onChange(of: monitor.bluetooth?.access) { _, _ in store.refresh() }
     }
 
-    private func permission(_ text: String, button: String) -> some View {
+    @ViewBuilder private func permission(_ text: String, button: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(text).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Button(button) { monitor.requestBluetooth() }.controlSize(.small)
+            Text(access.askingBluetooth ? "Waiting for macOS to ask you about Bluetooth…"
+                 : access.bluetoothUnanswered ? "macOS showed no prompt. Turn on MenuSprite in Privacy & Security › Bluetooth, then reopen this board."
+                 : text)
+                .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if access.askingBluetooth {
+                ProgressView().controlSize(.small)
+            } else if access.bluetoothUnanswered {
+                Button("Open Privacy Settings…") {
+                    ConnectivityMonitor.openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth")
+                }.controlSize(.small)
+            } else {
+                Button(button) { access.requestBluetooth() }.controlSize(.small)
+            }
         }
     }
 
