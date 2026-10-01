@@ -31,7 +31,11 @@ Pure mapping and tests: `SystemMonitoring/Connectivity.swift`, `Tests/SystemMoni
 
 - **Network name (SSID):** macOS gives it only to apps with Location access. Everything else on Wi-Fi needs
   nothing. Without it `wifi.network` is unavailable and says why; the Wi-Fi board has the **Allow…** button
-  (`requestWhenInUseAuthorization`). MenuSprite never asks for a location fix.
+  (`requestWhenInUseAuthorization`). MenuSprite never asks for a location fix. **The app runs under the hardened
+  runtime, so it needs `com.apple.security.personal-information.location` in `MenuSprite.entitlements`:
+  without it macOS drops the request silently** — no prompt, no error, status stays not-determined (found 1 Oct
+  when Allow did nothing). Requests come from `ConnectivityAccess.shared` (outlives the popover), with the app
+  brought forward first; after 8 silent seconds the board says macOS showed no prompt and opens the Privacy pane.
 - **Bluetooth:** IOBluetooth runs through the Bluetooth permission (`NSBluetoothAlwaysUsageDescription`, added
   1 Oct). Nothing touches IOBluetooth until `CBManager.authorization` is `allowedAlways`, so a sprite or the
   reading library can never raise the prompt; every `bluetooth.*` reading is unavailable with the reason until
