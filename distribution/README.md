@@ -43,8 +43,13 @@ unavailable values remain unavailable. CPU-temperature mapping is currently
 specific to the tested M5 family. Process lists update only while their panels
 are open, and do not include every protected system process.
 
-The preview excludes administrator helpers, battery charge control, closed-lid
-sleep overrides, fan control, capture, clipboard history, marketplace and sharing.
+Charge limit, discharge, Low Power Mode, the MagSafe light, fan control and
+closed-lid keep-awake are included. They need MenuSprite's power helper, which
+ships inside the app, stays off until you choose **Turn on power controls**, and
+runs only after you allow MenuSprite in System Settings → General → Login Items &
+Extensions (macOS asks for an administrator password there). The helper writes
+only the controls this Mac reports as writable. The experimental Work & Clients
+report stays excluded, as do capture, clipboard history, marketplace and sharing.
 It is an early public build, not a claim of complete replacement for other utilities.
 
 ## Privacy and settings

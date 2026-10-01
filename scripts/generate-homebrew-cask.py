@@ -34,15 +34,23 @@ cask "menusprite" do
   depends_on macos: :tahoe
 
   app "MenuSprite.app"
+  binary "#{appdir}/MenuSprite.app/Contents/Helpers/menusprite"
 
   uninstall quit: "in.prerakgada.MenuSprite"
 
-  zap trash: [
-    "~/Library/Application Support/MenuSprite",
-    "~/Library/Caches/in.prerakgada.MenuSprite",
-    "~/Library/Preferences/in.prerakgada.MenuSprite.plist",
-    "~/Library/Saved Application State/in.prerakgada.MenuSprite.savedState",
-  ]
+  # The power daemon is removed on zap only: uninstall also runs on every upgrade, and booting the daemon out
+  # there would ask for an administrator password each time. PowerHelper is the old developer-install label.
+  zap launchctl: [
+        "in.prerakgada.MenuSprite.PowerDaemon",
+        "in.prerakgada.MenuSprite.PowerHelper",
+      ],
+      trash:     [
+        "/Library/Application Support/MenuSprite",
+        "~/Library/Application Support/MenuSprite",
+        "~/Library/Caches/in.prerakgada.MenuSprite",
+        "~/Library/Preferences/in.prerakgada.MenuSprite.plist",
+        "~/Library/Saved Application State/in.prerakgada.MenuSprite.savedState",
+      ]
 end
 '''.replace("CHECKSUM", checksum).replace("HOMEBREW_VERSION", version['homebrew_version']).replace('preview.1', version['channel'])
 args.output.parent.mkdir(parents=True, exist_ok=True)
