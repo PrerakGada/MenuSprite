@@ -18,9 +18,9 @@ Public preview for Apple Silicon Macs on macOS 26+:
 brew install --cask prerakgada/tap/menusprite
 ```
 
-[Download and release notes](https://github.com/PrerakGada/menusprite-releases/releases/tag/v0.5.7-preview.1).
-Developer ID-signed and notarized; this preview excludes privileged battery and
-closed-lid controls. [Release verification](docs/release.md).
+[Download and release notes](https://github.com/PrerakGada/menusprite-releases/releases/tag/v0.5.9-preview.1).
+Developer ID-signed and notarized; battery, fan and closed-lid controls run through a
+helper that stays off until you turn it on. [Release verification](docs/release.md).
 
 
 - `brand/`: Slim rail / Arranger identity, variants, manifest, and references.

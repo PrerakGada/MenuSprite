@@ -14,7 +14,7 @@ brew install --cask prerakgada/tap/menusprite
 open -a MenuSprite
 ```
 
-Or [download the signed, notarized DMG](https://github.com/PrerakGada/menusprite-releases/releases/download/v0.5.7-preview.1/MenuSprite-0.5.7-preview.1-arm64-installer3.dmg):
+Or [download the signed, notarized DMG](https://github.com/PrerakGada/menusprite-releases/releases/download/v0.5.9-preview.1/MenuSprite-0.5.9-preview.1-arm64-installer3.dmg):
 
 1. Open the downloaded disk image.
 2. Drag **MenuSprite** onto the **Applications** shortcut in the installer window.
@@ -26,7 +26,7 @@ Use `brew upgrade --cask menusprite` for future updates; this preview has no in-
 updater.
 
 The ZIP remains available for Homebrew and existing download links. Both formats
-contain the same 0.5.7 (18) app.
+contain the same 0.5.9 (20) app.
 
 ## Public preview
 
@@ -36,6 +36,8 @@ contain the same 0.5.7 (18) app.
 - CPU/RAM/Power panels with ranked accessible apps/processes and helper grouping.
 - A Permissions & Access page for MenuSprite's own access, with explicit requests and system-setting links.
 - Keep-awake timers and automatic rules for power, displays and selected running apps.
+- Wi-Fi and Bluetooth sprites and boards. The Wi-Fi network name needs Location access, asked for only from the Wi-Fi board; Bluetooth readings start only after you allow Bluetooth from its board.
+- **Report a Problem…** and **Send Feedback…** in the hub's Tools tab.
 
 Per-app Power is **CPU-energy-derived**, not total electrical draw. GPU, display
 and other components are not assigned to individual apps. Sensors vary by Mac;
@@ -54,13 +56,18 @@ It is an early public build, not a claim of complete replacement for other utili
 
 ## Privacy and settings
 
-System monitoring stays on the Mac; no MenuSprite account or telemetry is required. Optional AI usage readings use your existing Claude Code/Codex login to contact the relevant provider for current limits, and may refresh an expiring login. The AI Accounts board shares saved logins with Claude Switcher. Switching a login changes the account used by the corresponding CLI; existing Codex sessions may retain their previous account. These features do not upload your project files or mail. Opening
+System monitoring stays on the Mac; no MenuSprite account or telemetry is required. MenuSprite sends something of its own only when you press **Send** in **Report a Problem…** or **Send Feedback…**: your message, the optional name and email you add, and the app version, build, macOS version and Mac model (the form lists exactly these), to the developer's feedback service at api.prerakgada.in. Optional AI usage readings use your existing Claude Code/Codex login to contact the relevant provider for current limits, and may refresh an expiring login. The AI Accounts board shares saved logins with Claude Switcher. Switching a login changes the account used by the corresponding CLI; existing Codex sessions may retain their previous account. These features do not upload your project files or mail. Opening
 Permissions & Access does not request permissions or capture private content.
 Settings are stored under `~/Library/Application Support/MenuSprite` and the app's
 `in.prerakgada.MenuSprite` preferences. Readouts can be hidden or disabled separately.
 
 ## Feedback
 
-Report reproducible issues in this repository. Include the MenuSprite version,
-macOS version and Mac model. Do not attach passwords, private process data or
-personal diagnostic files without reviewing them first.
+In the app, open the MenuSprite hub, choose **Tools**, then **Report a Problem…**
+or **Send Feedback…**. It goes straight to the developer with MenuSprite's version and build,
+your macOS version and Mac model, and only when you press **Send**. Name and email
+are optional; add your email if you would like a reply.
+
+You can also report reproducible issues in this repository. Include the MenuSprite
+version, macOS version and Mac model. Do not attach passwords, private process data
+or personal diagnostic files without reviewing them first.
