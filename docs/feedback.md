@@ -5,8 +5,10 @@ they all post to one shared endpoint, `POST https://api.prerakgada.in/v1/p/menus
 
 ## Where
 
-The hub's **Tools** tab ends with a **Help & feedback** card holding **Report a Problem…** and
-**Send Feedback…**. MenuSprite has no status-item menu, Help menu or Settings window to put them in.
+The hub's **Tools** tab opens with a **Help & feedback** card holding **Report a Problem…** and
+**Send Feedback…**, first so it is seen without scrolling. MenuSprite has no status-item menu, Help menu
+or Settings window to put them in. The hub reopens on the last tab used, so no tab is a fixed front page;
+the top of System would sit above the readings on every daily open.
 Both open one small window (`FeedbackWindow.swift`); Report a Problem… chooses *Problem*, Send Feedback…
 chooses *Idea*. It is an ordinary titled window, because typing needs a key window and the hub is a
 non-activating panel. While it is open MenuSprite has a Dock icon, as it does for the main window.
@@ -34,7 +36,7 @@ checks that.
 - `swift test --filter ProductFeedbackTests`: the request, the body's exact keys, the local checks
   (the server's own sentences), the reply mapping, the 15 s limit and cancellation, all through a
   fake transport.
-- `MenuSprite --feedback-render <dir>`: every state of the window and the hub card, light and dark,
-  off-screen. Nothing is shown or sent.
+- `MenuSprite --feedback-render <dir>`: every state of the window, the hub card, and the Tools tab's
+  first screen, light and dark, off-screen. Nothing is shown or sent.
 
 Not yet exercised on screen: typing, the shortcuts, activation from the hub, and a real send.

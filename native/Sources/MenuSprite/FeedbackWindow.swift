@@ -329,8 +329,24 @@ enum FeedbackRenderHarness {
                 written.append("hub-card-\(suffix)")
             }
         }
+        // The Tools tab as the hub first shows it (480 pt wide, about 350 pt of body between the tab rail and
+        // the footer), so the card's place is checked, not just the card. Throwaway settings; nothing samples.
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("menusprite-feedback-render-\(UUID().uuidString)")
+        let suite = "MenuSprite.FeedbackRender.\(UUID().uuidString)"
+        let monitoring = MonitoringStore(configurationURL: scratch.appendingPathComponent("monitoring.json"))
+        let power = PowerStore(preferences: UserDefaults(suiteName: suite)!)
+        for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            let tools = HubToolsSection(monitoring: monitoring, power: power, actions: HubActions(), close: {})
+                .frame(width: 480, height: 350).background(Color(nsColor: .windowBackgroundColor))
+            if write(tools, appearance: appearance, to: directory.appendingPathComponent("hub-tools-first-screen-\(suffix).png")) {
+                written.append("hub-tools-first-screen-\(suffix)")
+            }
+        }
+        power.stopAwake()
+        UserDefaults.standard.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: scratch)
         print("Feedback render: \(written.count) images in \(directory.path) · sends with: \(client.context.summary) · live sender in this launch: \(FeedbackWindowController.sendsForReal)")
-        exit(written.count == states.count * 2 + 2 ? 0 : 1)
+        exit(written.count == states.count * 2 + 4 ? 0 : 1)
     }
 
     private static func write(_ view: some View, appearance: NSAppearance.Name, to url: URL) -> Bool {

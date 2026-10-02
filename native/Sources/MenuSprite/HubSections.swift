@@ -383,7 +383,8 @@ struct HubWorkSection: View {
 
 // MARK: - Tools
 
-/// Keep-awake, the sensors that have no page of their own, and "Report a Problem…" / "Send Feedback…".
+/// "Report a Problem…" / "Send Feedback…" first, so they are found without scrolling; then keep-awake
+/// and the sensors that have no page of their own.
 struct HubToolsSection: View {
     @ObservedObject var monitoring: MonitoringStore
     @ObservedObject var power: PowerStore
@@ -392,6 +393,7 @@ struct HubToolsSection: View {
 
     var body: some View {
         HubScroll {
+            HubFeedbackCard(close: close)
             HubKeepAwakeCard(power: power, openPowerControls: { close(); actions.openPowerControls() })
             HubMenuBarSpacingCard()
             HubMenuBarIconCard()
@@ -400,7 +402,6 @@ struct HubToolsSection: View {
                 HubStat(label: "CPU temperature", value: monitoring.hubValue("sensor.cpuTemperature"))
                 HubStat(label: "GPU temperature", value: monitoring.hubValue("sensor.gpuTemperature"))
             }
-            HubFeedbackCard(close: close)
         }
     }
 }
