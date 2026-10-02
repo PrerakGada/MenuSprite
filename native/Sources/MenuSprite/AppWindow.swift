@@ -131,7 +131,8 @@ final class AppWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate {
         showing = nil
         window.delegate = nil
         self.window = nil
-        NSApp.setActivationPolicy(.accessory)
+        // The feedback window keeps MenuSprite an ordinary app while it is still open.
+        if !FeedbackWindowController.shared.isOpen { NSApp.setActivationPolicy(.accessory) }
     }
 
     func windowDidChangeOcclusionState(_ notification: Notification) { reportVisibility() }

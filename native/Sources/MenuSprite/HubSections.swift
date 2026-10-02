@@ -383,7 +383,7 @@ struct HubWorkSection: View {
 
 // MARK: - Tools
 
-/// Keep-awake, the sensors that have no page of their own, and the way into the two full windows.
+/// Keep-awake, the sensors that have no page of their own, and "Report a Problem…" / "Send Feedback…".
 struct HubToolsSection: View {
     @ObservedObject var monitoring: MonitoringStore
     @ObservedObject var power: PowerStore
@@ -400,6 +400,7 @@ struct HubToolsSection: View {
                 HubStat(label: "CPU temperature", value: monitoring.hubValue("sensor.cpuTemperature"))
                 HubStat(label: "GPU temperature", value: monitoring.hubValue("sensor.gpuTemperature"))
             }
+            HubFeedbackCard(close: close)
         }
     }
 }

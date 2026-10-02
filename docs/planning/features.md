@@ -199,7 +199,7 @@ independent item variants until an explicit override model is designed.
 | APP-04 | Permissions & Access page — current first step | All app-permission categories on one page with scoped status, purpose, used-by and Request/Manage actions. Preserve unknown/limited/restricted states; OS grants and local enablement are separate. Explicit actions initiate requests; opening the page does not. See ../permissions-page.md. |
 | APP-05 | Health/activity | Per-item source status, last success, pending/failed action, refresh policy, and resource diagnostics. Attribute slow integration work without claiming precise per-item OS CPU accounting. |
 | APP-06 | Recovery | Open with suspect integrations/organizer disabled; keep configurations inspectable; recover backup or export before reset. |
-| APP-07 | Privacy | Local operation by default; no analytics/upload backend proposed. Configured network integrations can send data and must describe that destination. Diagnostics exclude secrets by default. |
+| APP-07 | Privacy | Local operation by default; no analytics or telemetry. The one built-in send is Report a Problem… / Send Feedback… (hub → Tools): only when the person presses Send, it posts what they typed plus app version, build, macOS version and Mac model to the maintainer's feedback endpoint (`api.prerakgada.in/v1/p/menusprite/feedback`), and the form lists exactly that. Configured network integrations can send data and must describe that destination. Diagnostics exclude secrets by default. |
 | APP-08 | Distribution | Personal install/uninstall, version identity, documented signing path for sharing; update mechanism to be selected before public release. No launch date promise. |
 
 ## 10. Expanded sprite, utility and community requirements

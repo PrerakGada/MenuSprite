@@ -46,6 +46,9 @@ final class ReleaseValidation {
         // Reading the status never prompts; launching must not register anything (nobody is asked for anything).
         check("Launching asks nothing of macOS for the helper", !PowerHelperInstall.registrationRequested)
         check("Only MenuSprite bundle identity", Bundle.main.bundleIdentifier == "in.prerakgada.MenuSprite")
+        // Feedback is posted only from an ordinary launch, only on Send; a validation launch has no live sender.
+        check("Feedback cannot be sent from a validation launch, and no feedback window opens at launch",
+              !FeedbackWindowController.sendsForReal && !FeedbackWindowController.shared.isOpen)
         let configurations = app.monitoringStore.sprites
         check("Fresh install has six configured items", configurations.count == 6)
         check("Battery item among fresh-install defaults", configurations.contains { $0.metricIDs == ["battery.charge"] })

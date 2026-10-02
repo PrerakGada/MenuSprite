@@ -9,6 +9,8 @@ import SwiftUI
 @MainActor
 enum MenuBarIconRenderHarness {
     static func runIfRequested() {
+        // `--feedback-render` rides on this hook so MenuSpriteMain needs no edit; move it there when convenient.
+        FeedbackRenderHarness.runIfRequested()
         let arguments = CommandLine.arguments
         guard let index = arguments.firstIndex(of: "--menu-bar-icon-render"), arguments.indices.contains(index + 1) else { return }
         let directory = URL(fileURLWithPath: arguments[index + 1])
