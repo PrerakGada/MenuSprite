@@ -25,7 +25,7 @@ cancels it.
 ## What is sent
 
 Only the message, the optional name and email, and app version, build, platform, macOS version and
-`hw.model` (`ProductFeedback/ProductFeedback.swift`, `FeedbackContext`). Nothing is stored: name and
+`hw.model` (`ProductFeedback/ProductFeedback.swift`, `FeedbackContext`). The server notes a rough location (country, region and city) from your connection and stores no IP address. Nothing is stored: name and
 email live in the window and go when it closes. There is no network at launch, in the background or in
 tests. The real sender exists only for an ordinary launch (no arguments, or `--background`); every
 validation, render and diagnostic launch gets `OfflineFeedbackTransport`, and `--release-validate`

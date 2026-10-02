@@ -10,7 +10,8 @@ MenuSprite has no account, analytics or telemetry. It sends something of its own
 you press **Send** in **Report a Problem…** or **Send Feedback…** (hub → Tools): your message,
 the name and email you chose to add, and the app version, build, macOS version and Mac model,
 to the maintainer's feedback endpoint at `api.prerakgada.in`. Nothing is sent at launch or in
-the background, and the app does not keep the name or email. Optional AI usage tools contact the relevant
+the background, and the app does not keep the name or email.
+The server notes a rough location (country, region and city) from your connection and stores no IP address. Optional AI usage tools contact the relevant
 provider with the user's CLI credentials and can refresh or switch those credentials.
 Spend estimates read local session logs only after being enabled. The experimental
 Work & Clients report reads a user-selected local database. These records do not
