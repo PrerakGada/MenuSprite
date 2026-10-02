@@ -1,6 +1,6 @@
 # Public Homebrew preview
 
-**Current: MenuSprite 0.5.8 Preview 1 (19), released 1 October 2026.**
+**Current: MenuSprite 0.5.9 Preview 1 (20), released 2 October 2026.**
 Signed and notarized for Apple Silicon Macs running macOS 26 or newer.
 
 ```sh
@@ -11,9 +11,9 @@ Update an existing Homebrew installation with `brew update`, then
 `brew upgrade --cask prerakgada/tap/menusprite`.
 
 - [Website and DMG installation guide](https://menusprite.prerakgada.in/#download)
-- [GitHub release and checksums](https://github.com/PrerakGada/menusprite-releases/releases/tag/v0.5.8-preview.1)
+- [GitHub release and checksums](https://github.com/PrerakGada/menusprite-releases/releases/tag/v0.5.9-preview.1)
 - [Homebrew cask](https://github.com/PrerakGada/homebrew-tap/blob/main/Casks/menusprite.rb)
-- [Full 0.5.8 verification record](release-0.5.8.md) · [0.5.7](release-0.5.7.md) · [0.5.6](release-0.5.6.md) · [0.5.5](release-0.5.5.md)
+- [Full 0.5.9 verification record](release-0.5.9.md) · [0.5.8](release-0.5.8.md) · [0.5.7](release-0.5.7.md) · [0.5.6](release-0.5.6.md) · [0.5.5](release-0.5.5.md)
 - [Historical 0.4.0 release](release-0.4.0.md)
 
 ## Public scope
