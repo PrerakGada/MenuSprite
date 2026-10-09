@@ -24,3 +24,35 @@ Check the canonical HTTPS URL, internal anchors, downloaded artwork, DMG and rel
 links. Confirm the release tag and filenames against `distribution/version.json` and
 verify each release checksum. Keep account dashboards, DNS record IDs, deployment IDs,
 rollback URLs and deployment logs in private operational notes.
+
+## Download form and the Homebrew command (9 October 2026)
+
+The page no longer prints the Homebrew command. Both "Install with Homebrew" (hero, beside
+Download) and "Get the Homebrew command" (install section, beside the DMG button) are
+`<button data-pt-command>` elements owned by the shared download tracker
+(`https://api.prerakgada.in/v1/p/tracker.js?v=3`). The tracker opens the download form, which
+can also be filled by signing in with Google or Apple, then shows the command from its script
+tag's `data-command` with a Copy button. Every field stays optional and the form keeps its skip
+button. The FAQ "Does this website track me?" says what the form asks and what sign-in shares.
+
+- The command lives in one place for script: the tracker tag's `data-command`. JavaScript-off
+  visitors get a `<noscript>` copy, and the buttons and hint are hidden for them.
+- `site/app.js` falls back to showing the command in the install section when the tracker
+  never loaded (an extension blocked it, or the API is down) or did not open its dialog within
+  600 ms of the click. Installing is never blocked; those installs are simply not collected.
+- The FAQ's update line uses the short cask name (`brew upgrade --cask menusprite`), which
+  resolves for anyone who installed from the tap.
+- The CSP in `vercel.json` needs no change: the tracker's script, stylesheet and requests all go
+  to `api.prerakgada.in`, and sign-in runs in a separate popup window.
+- **Deploy only after the backend serves the v3 tracker** (Cloudflare would otherwise cache the
+  old file under `?v=3` for hours):
+
+```sh
+curl -s 'https://api.prerakgada.in/v1/p/tracker.js?v=3' | grep -q pt-identity && echo ready
+npm run check && npm run build && vercel deploy --prod --scope engaze
+curl -s https://menusprite.prerakgada.in/ | grep -c 'tracker.js?v=3'      # 1
+curl -s https://menusprite.prerakgada.in/ | grep -c 'data-pt-command'     # 3 (two buttons + the noscript style)
+```
+
+The install command is still public in the repository README, `distribution/` and the GitHub
+release notes; the gate covers the website only.

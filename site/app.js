@@ -1,9 +1,30 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const copyInstall = $('#copy-install');
-copyInstall.hidden = false;
-copyInstall.addEventListener('click', async () => {
-  const command = $('#install-command');
+// The Homebrew command is not printed on the page. Buttons marked data-pt-command belong to the
+// shared download tracker (api.prerakgada.in): it opens the download form, then shows the command
+// from its script tag's data-command. If the tracker never loaded (an extension blocked it, the API
+// is down) or did not open its dialog, show the command here instead, so installing is never blocked.
+const installCommand = document.querySelector('script[data-command]')?.getAttribute('data-command') ?? '';
+function trackerDialogOpen() {
+  if (document.querySelector('dialog[open]')) return true;
+  return [...document.body.children].some(element => element.shadowRoot?.querySelector('dialog[open]'));
+}
+function revealCommand() {
+  const fallback = $('#command-fallback');
+  if (!fallback || !installCommand) return;
+  $('#fallback-command').textContent = installCommand;
+  fallback.hidden = false;
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  fallback.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'center' });
+  $('#copy-command').focus({ preventScroll: true });
+}
+window.addEventListener('click', event => {
+  if (!(event.target instanceof Element) || !event.target.closest('[data-pt-command]')) return;
+  if (!window.productTracker) { revealCommand(); return; }
+  setTimeout(() => { if (!trackerDialogOpen()) revealCommand(); }, 600);
+});
+$('#copy-command')?.addEventListener('click', async () => {
+  const command = $('#fallback-command');
   const status = $('#copy-status');
   try {
     await navigator.clipboard.writeText(command.textContent);

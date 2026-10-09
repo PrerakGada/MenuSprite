@@ -32,7 +32,7 @@
 .install-method .copy-status{min-height:1.8em;margin-block:7px 12px;font-size:12px;color:var(--violet-dark)}
 .install-method .install-help{margin-top:12px;font-size:12px;line-height:1.8}
 .install-help a,.faq-list p a{text-decoration:underline;text-underline-offset:3px;color:var(--violet-dark)}
-.dmg-download{margin-top:18px}
+.dmg-download,.brew-command{margin-top:18px}
 .download-size{font-weight:500;color:var(--muted);font-size:12px}
 .install-steps{margin:18px 0 0;padding-left:20px;color:var(--muted);font-size:14px;line-height:1.8}
 .install-steps li+li{margin-top:5px}
