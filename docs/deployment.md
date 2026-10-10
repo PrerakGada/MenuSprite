@@ -25,15 +25,17 @@ links. Confirm the release tag and filenames against `distribution/version.json`
 verify each release checksum. Keep account dashboards, DNS record IDs, deployment IDs,
 rollback URLs and deployment logs in private operational notes.
 
-## Download form and the Homebrew command (9 October 2026)
+## Download form and the Homebrew command (9 October 2026, sign-in removed 10 October)
 
 The page no longer prints the Homebrew command. Both "Install with Homebrew" (hero, beside
 Download) and "Get the Homebrew command" (install section, beside the DMG button) are
 `<button data-pt-command>` elements owned by the shared download tracker
-(`https://api.prerakgada.in/v1/p/tracker.js?v=4`). The tracker opens the download form, which
-can also be filled by signing in with Google or Apple, then shows the command from its script
-tag's `data-command` with a Copy button. Every field stays optional and the form keeps its skip
-button. The FAQ "Does this website track me?" says what the form asks and what sign-in shares.
+(`https://api.prerakgada.in/v1/p/tracker.js?v=5`). The tracker opens the download form (typed
+name and email, all optional), then shows the command from its script tag's `data-command` with a
+Copy button. The form keeps its skip button. There is no Google or Apple sign-in on the form: on
+10 October 2026 sign-in was taken off the landing-page download forms (it belongs inside apps that
+have a login), and the shared backend serves the tracker with both providers off. The FAQ "Does
+this website track me?" says what the form asks.
 
 - The command lives in one place for script: the tracker tag's `data-command`. JavaScript-off
   visitors get a `<noscript>` copy, and the buttons and hint are hidden for them.
@@ -43,20 +45,21 @@ button. The FAQ "Does this website track me?" says what the form asks and what s
 - The FAQ's update line uses the short cask name (`brew upgrade --cask menusprite`), which
   resolves for anyone who installed from the tap.
 - The CSP in `vercel.json` needs no change: the tracker's script, stylesheet and requests all go
-  to `api.prerakgada.in`, and sign-in runs in a separate popup window.
-- **Deploy only after the backend serves the current tracker.** The page uses `?v=4`, not `?v=3`:
-  `?v=3` was fetched through Cloudflare before the backend deploy, so Cloudflare holds the old
-  file under that query string. Never request a tracker version through `api.prerakgada.in`
+  to `api.prerakgada.in`.
+- **Deploy only after the backend serves the current tracker.** The page uses `?v=5`. Older
+  query strings are stale at Cloudflare (`?v=3` holds the old v2 file, `?v=4` still shows
+  "Continue with Apple" for hours). Never request a tracker version through `api.prerakgada.in`
   before it is deployed (Cloudflare would cache the old file under it for hours):
 
 ```sh
-curl -s 'https://api.prerakgada.in/v1/p/tracker.js?v=4' | grep -q productTracker:identity && echo ready
+curl -s 'https://api.prerakgada.in/v1/p/tracker.js?v=5' | grep -c '"apple":false'      # 1
 npm run check && npm run build && vercel deploy --prod --scope engaze
-curl -s https://menusprite.prerakgada.in/ | grep -c 'tracker.js?v=4'      # 1
+curl -s https://menusprite.prerakgada.in/ | grep -c 'tracker.js?v=5'      # 1
 curl -s https://menusprite.prerakgada.in/ | grep -c 'data-pt-command'     # 3 (two buttons + the noscript style)
 ```
 
-Deployed to production on 10 October 2026 with the `?v=4` tracker tag.
+Deployed to production on 10 October 2026 with the `?v=4` tracker tag, then redeployed the same
+day with `?v=5` and the sign-in wording removed.
 
 The install command is still public in the repository README, `distribution/` and the GitHub
 release notes; the gate covers the website only.
