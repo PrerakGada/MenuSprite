@@ -56,5 +56,7 @@ curl -s https://menusprite.prerakgada.in/ | grep -c 'tracker.js?v=4'      # 1
 curl -s https://menusprite.prerakgada.in/ | grep -c 'data-pt-command'     # 3 (two buttons + the noscript style)
 ```
 
+Deployed to production on 10 October 2026 with the `?v=4` tracker tag.
+
 The install command is still public in the repository README, `distribution/` and the GitHub
 release notes; the gate covers the website only.
