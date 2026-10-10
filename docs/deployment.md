@@ -30,7 +30,7 @@ rollback URLs and deployment logs in private operational notes.
 The page no longer prints the Homebrew command. Both "Install with Homebrew" (hero, beside
 Download) and "Get the Homebrew command" (install section, beside the DMG button) are
 `<button data-pt-command>` elements owned by the shared download tracker
-(`https://api.prerakgada.in/v1/p/tracker.js?v=3`). The tracker opens the download form, which
+(`https://api.prerakgada.in/v1/p/tracker.js?v=4`). The tracker opens the download form, which
 can also be filled by signing in with Google or Apple, then shows the command from its script
 tag's `data-command` with a Copy button. Every field stays optional and the form keeps its skip
 button. The FAQ "Does this website track me?" says what the form asks and what sign-in shares.
@@ -44,13 +44,15 @@ button. The FAQ "Does this website track me?" says what the form asks and what s
   resolves for anyone who installed from the tap.
 - The CSP in `vercel.json` needs no change: the tracker's script, stylesheet and requests all go
   to `api.prerakgada.in`, and sign-in runs in a separate popup window.
-- **Deploy only after the backend serves the v3 tracker** (Cloudflare would otherwise cache the
-  old file under `?v=3` for hours):
+- **Deploy only after the backend serves the current tracker.** The page uses `?v=4`, not `?v=3`:
+  `?v=3` was fetched through Cloudflare before the backend deploy, so Cloudflare holds the old
+  file under that query string. Never request a tracker version through `api.prerakgada.in`
+  before it is deployed (Cloudflare would cache the old file under it for hours):
 
 ```sh
-curl -s 'https://api.prerakgada.in/v1/p/tracker.js?v=3' | grep -q pt-identity && echo ready
+curl -s 'https://api.prerakgada.in/v1/p/tracker.js?v=4' | grep -q productTracker:identity && echo ready
 npm run check && npm run build && vercel deploy --prod --scope engaze
-curl -s https://menusprite.prerakgada.in/ | grep -c 'tracker.js?v=3'      # 1
+curl -s https://menusprite.prerakgada.in/ | grep -c 'tracker.js?v=4'      # 1
 curl -s https://menusprite.prerakgada.in/ | grep -c 'data-pt-command'     # 3 (two buttons + the noscript style)
 ```
 
