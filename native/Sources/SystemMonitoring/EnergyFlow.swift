@@ -25,8 +25,12 @@ public struct EnergyFlow: Sendable, Equatable {
             return v
         }
         adapter = number("sensor.PDTR", range: 0...1000)
-        system = number("sensor.PSTR", range: 0...1000)
         battery = number("battery.power", range: -1000...1000)
+        // PSTR is the adapter-plus-battery sum one SMC tick late (Nebula, 8 Oct: equal to the
+        // previous second's PDTR − battery in every sample), so pairing it with this second's
+        // adapter drew up to ±11 W of jitter as "Other". The same-instant pair is the Mac's draw.
+        if let adapter, let battery, adapter - battery >= 0 { system = adapter - battery }
+        else { system = number("sensor.PSTR", range: 0...1000) }
         charge = number("battery.charge", range: 0...100)
         temperature = number("battery.temperature", range: -20...120)
         sourceState = current("battery.state")?.text

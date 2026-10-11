@@ -210,14 +210,14 @@ final class EnergyDocumentView: NSView {
         return min(100, max(21, raw))
     }
     /// What the pack is doing, as icons after the percentage: plug (on the cable) with + charging
-    /// or − draining, a sailboat while sailing, pause while a discharge is held, ↑ during Top Up.
+    /// or − draining, a sailboat while sailing, pause while held above the limit, ↑ during Top Up.
     private var stateSymbols: [(String, String?)] {
         guard power.snapshot.pluggedIn == true else { return [] }
         let charging = (power.snapshot.chargeCurrent ?? 0) > 0 || (power.batteryAmperage ?? 0) > 50
         let draining = power.usesSystemLimit ? power.isDraining : power.snapshot.mode == .discharge
         var result: [(String, String?)] = [("powerplug.fill", charging ? "plus" : draining ? "minus" : nil)]
         if power.usesSystemLimit && power.isSailing { result.append(("sailboat.fill", nil)) }
-        if power.holdLevel != nil { result.append(("pause.fill", nil)) }
+        if power.usesSystemLimit && power.isHoldingAboveLimit { result.append(("pause.fill", nil)) }
         if power.topUpActive { result.append(("arrow.up.to.line", nil)) }
         return result
     }

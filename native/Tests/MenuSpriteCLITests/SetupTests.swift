@@ -119,7 +119,6 @@ private func setup(home: String, environment: [String: String] = [:], runner: Pr
     }
     #expect(try FileManager.default.contentsOfDirectory(atPath: home).isEmpty)
     #expect(try tool.run(agent: "claude", printOnly: true).message == "Register MenuSprite with Claude Code:\n  claude mcp add --scope user menusprite -- \(binary) mcp\n")
-    #expect(try tool.run(agent: "antigravity", printOnly: false).message.contains(".gemini/antigravity/mcp_config.json"))
     #expect(throws: CommandError.self) { try tool.run(agent: "chatgpt", printOnly: true) }
     #expect(AgentSetup.shellQuoted("/Users/a b/menusprite") == "'/Users/a b/menusprite'")
 }
@@ -155,4 +154,59 @@ private func setup(home: String, environment: [String: String] = [:], runner: Pr
     #expect(try FileManager.default.contentsOfDirectory(atPath: home).isEmpty)
     #expect(tool.run(["setup"]) == 0)
     #expect(capture.out.contains("menusprite setup claude-desktop"))
+}
+
+@Test func eachAgentGetsItsOwnFileInItsOwnShape() throws {
+    let home = try scratchFolder()
+    let tool = setup(home: home)
+    func json(_ path: String) throws -> JSONValue { try JSONValue.parse(try Data(contentsOf: URL(fileURLWithPath: home + path))) }
+    let plain = JSONValue.object([JSONMember("command", .string(binary)), JSONMember("args", ["mcp"])])
+
+    // Copilot: the shape `copilot mcp add` writes, a local server allowed every tool.
+    #expect(try tool.run(agent: "copilot", printOnly: false).changed)
+    #expect(try json("/.copilot/mcp-config.json")["mcpServers"]?["menusprite"] == .object([
+        JSONMember("type", "local"), JSONMember("command", .string(binary)), JSONMember("args", ["mcp"]), JSONMember("tools", ["*"])]))
+
+    // Gemini CLI keeps everything else in settings.json.
+    try FileManager.default.createDirectory(atPath: home + "/.gemini/config", withIntermediateDirectories: true)
+    try #"{"theme": "Dracula", "security": {"auth": {"selectedType": "oauth-personal"}}}"#.write(toFile: home + "/.gemini/settings.json", atomically: true, encoding: .utf8)
+    #expect(try tool.run(agent: "gemini", printOnly: false).changed)
+    #expect(try json("/.gemini/settings.json").keys == ["theme", "security", "mcpServers"])
+    #expect(try json("/.gemini/settings.json")["mcpServers"]?["menusprite"] == plain)
+
+    // Antigravity (app and agy) reads ~/.gemini/config/mcp_config.json, which starts as an empty file.
+    try Data().write(to: URL(fileURLWithPath: home + "/.gemini/config/mcp_config.json"))
+    let antigravity = try tool.run(agent: "agy", printOnly: false)
+    #expect(antigravity.changed && antigravity.file == home + "/.gemini/config/mcp_config.json")
+    #expect(try json("/.gemini/config/mcp_config.json")["mcpServers"]?["menusprite"] == plain)
+
+    // Kimi Code: KIMI_CODE_HOME, else ~/.kimi-code.
+    #expect(try tool.run(agent: "kimi", printOnly: false).file == home + "/.kimi-code/mcp.json")
+    let elsewhere = try scratchFolder()
+    #expect(try setup(home: home, environment: ["KIMI_CODE_HOME": elsewhere]).run(agent: "kimi-code", printOnly: false).file == elsewhere + "/mcp.json")
+
+    // Grok: the table `grok mcp add --scope user` writes, appended once.
+    try FileManager.default.createDirectory(atPath: home + "/.grok", withIntermediateDirectories: true)
+    try "[ui]\nscreen_mode = \"minimal\"\n".write(toFile: home + "/.grok/config.toml", atomically: true, encoding: .utf8)
+    #expect(try tool.run(agent: "grok", printOnly: false).changed)
+    let grok = try String(contentsOfFile: home + "/.grok/config.toml", encoding: .utf8)
+    #expect(grok == "[ui]\nscreen_mode = \"minimal\"\n\n[mcp_servers.menusprite]\ncommand = \"\(binary)\"\nargs = [\"mcp\"]\nenabled = true\n")
+    #expect(try !tool.run(agent: "grok", printOnly: false).changed)
+}
+
+@Test func setupAllSkipsWhatIsNotInstalledAndKeepsGoing() throws {
+    let home = try scratchFolder()
+    // Only Kimi's folder exists, and Cursor's config does not parse.
+    try FileManager.default.createDirectory(atPath: home + "/.kimi-code", withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(atPath: home + "/.cursor", withIntermediateDirectories: true)
+    try "{ not json".write(toFile: home + "/.cursor/mcp.json", atomically: true, encoding: .utf8)
+    let tool = setup(home: home, environment: ["PATH": ""], runner: ProcessRunner { _, _ in (0, "") })
+    let outcomes = tool.runAll(printOnly: false)
+    #expect(outcomes.map(\.agent) == AgentSetup.Agent.allCases.map(\.rawValue))
+    #expect(outcomes.first { $0.agent == "kimi" }?.changed == true)
+    #expect(outcomes.first { $0.agent == "cursor" }?.message.contains("not valid JSON") == true)
+    // Whatever this Mac lacks (agents' commands are also looked for in the usual folders) is skipped, never written.
+    for outcome in outcomes where !tool.installed(AgentSetup.Agent(rawValue: outcome.agent)!) {
+        #expect(outcome.message.contains("not installed") && !outcome.changed)
+    }
 }

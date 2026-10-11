@@ -42,23 +42,18 @@ struct MonitoringView: View {
                     }.frame(minWidth: 520, maxWidth: .infinity)
                 }
             }
-            Divider()
-            VStack(spacing: 5) {
-                if let notice = store.notice {
-                    HStack {
-                        Text(notice).font(.callout).textSelection(.enabled)
-                        Spacer()
-                        if store.canUndoRemove { Button("Undo") { store.undoRemove() } }
-                        Button { store.notice = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Dismiss")
-                    }
-                }
+            // Only something worth saying earns a footer (a removal to undo, a save that failed);
+            // sampling internals stay out of sight.
+            if let notice = store.notice {
+                Divider()
                 HStack {
-                    Label(store.suspended ? "Paused during sleep" : (store.isSampling ? "Shared sampling is active" : "Sampling is stopped"), systemImage: store.isSampling ? "waveform.path" : "pause.circle")
+                    Text(notice).font(.callout).textSelection(.enabled)
                     Spacer()
-                    Text("\(store.requestedMetricCount) requested readings")
-                    if let time = store.lastSample { Text("Checked \(time.formatted(date: .omitted, time: .standard))").monospacedDigit() }
-                }.font(.caption).foregroundStyle(.secondary)
-            }.padding(.horizontal, 24).padding(.vertical, 11)
+                    if store.canUndoRemove { Button("Undo") { store.undoRemove() } }
+                    Button { store.notice = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Dismiss")
+                }
+                .padding(.horizontal, 24).padding(.vertical, 11)
+            }
         }
         .frame(minWidth: studio == nil ? 900 : 1120, minHeight: 640)
         .background(Color(nsColor: .windowBackgroundColor))

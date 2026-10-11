@@ -63,9 +63,9 @@ struct MixerMasterColumn: View {
             if let volume = audio.volume {
                 let shown = audio.isMuted ? 0 : volume
                 IslandLevelSlider(value: Binding(get: { shown }, set: set), range: 0...MixerLevel.systemMaximum, vertical: true,
-                                  accessibilityLabel: "Output volume")
+                                  editingChanged: { if !$0 { audio.volumeEditEnded() } }, accessibilityLabel: "Output volume")
                     .frame(width: MixerDeskLayout.faderWidth, height: layout.track)
-                MixerPercentLabel(id: "system", gain: shown, maximum: MixerLevel.systemMaximum, editing: $editing, commit: set)
+                MixerPercentLabel(id: "system", gain: shown, maximum: MixerLevel.systemMaximum, editing: $editing, commit: { set($0); audio.volumeEditEnded() })
                     .frame(height: MixerDeskLayout.footerHeight)
             } else {
                 Text("Output unavailable")

@@ -97,6 +97,8 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
     private let openEditor: (SpriteConfiguration) -> Void
     private let openAccounts: (NSRect?, NSWindow?) -> Void
     private var popover: NSPopover?
+    /// Set while MenuSprite itself closes the board, so `popoverShouldClose` lets it go even mid-screenshot.
+    private var closingBoard = false
     private var memoryPanel: MemoryPanel?
     private var panelEventMonitors: [Any] = []
     private var panelObservers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -245,6 +247,7 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         energyController?.stop()
         memoryStore?.stop()
         store.closeBoard(config.id)
+        closingBoard = true; defer { closingBoard = false }
         popover?.performClose(nil)
         memoryPanel?.close()
     }
@@ -402,13 +405,13 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         removeDismissal()
         if let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !PanelInteraction.isSuspended, !self.pointerIsOverAnchor else { return }
+                guard let self, !PanelInteraction.holdsBoards, !self.pointerIsOverAnchor else { return }
                 self.closeBoard()
             }
         }) { panelEventMonitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
             MainActor.assumeIsolated {
-                guard !PanelInteraction.isSuspended else { return }
+                guard !PanelInteraction.holdsBoards else { return }
                 if let self, event.window !== self.boardWindow, self.item == nil || event.window !== self.button.window,
                    !self.pointerIsOverAnchor { self.closeBoard() }
             }
@@ -419,7 +422,7 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
             let observer = workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 let activatedPID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
                 MainActor.assumeIsolated {
-                    guard !PanelInteraction.isSuspended else { return }
+                    guard !PanelInteraction.holdsBoards else { return }
                     if let activatedPID {
                         if activatedPID == ProcessInfo.processInfo.processIdentifier { return }
                         if NSWorkspace.shared.frontmostApplication?.processIdentifier != activatedPID { return }
@@ -445,6 +448,11 @@ private final class SpriteMenuItem: NSObject, NSPopoverDelegate, NSWindowDelegat
         guard notification.object as? NSPopover === popover else { return }
         memoryStore?.stop()
         store.closeBoard(config.id)
+    }
+    /// macOS closes a transient popover on the click that starts a screenshot; keep it for the picture.
+    /// A close MenuSprite asks for itself (the sprite clicked again, Esc) always goes through.
+    func popoverShouldClose(_ popover: NSPopover) -> Bool {
+        closingBoard || !ScreenshotInProgress.isInProgress
     }
     func popoverDidClose(_ notification: Notification) {
         guard notification.object as? NSPopover === popover else { return }

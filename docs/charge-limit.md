@@ -36,7 +36,8 @@ binary logs "writing defaults charge limit" and "writing MCL limit", and its roo
   reached 69% within the session.
 - `--limit-validate <dir>` on the installed signed app with the upgraded helper: **14/14** —
   60% through the helper (a value PowerUI refuses), powerd enforcing it, Top Up to 100 and back,
-  a paused discharge holding the current level and resuming, the MagSafe LED read back as
+  a paused discharge holding the current level and resuming (since 10 Oct: the level held above
+  the limit, Discharge draining to it, Stop holding again), the MagSafe LED read back as
   blinking amber, and the original limit restored.
 - **powerd's record (`/Library/Preferences/com.apple.powerd.charging.plist`) lags PowerUI by
   roughly 6–10 s after a change.** The app treats a record that disagrees with PowerUI as stale
@@ -57,9 +58,22 @@ binary logs "writing defaults charge limit" and "writing MCL limit", and its roo
   value shows while dragging and is applied on release. The dashboard slider, the right-click
   presets and "Apply limit" set the same limit. "Turn limit off" writes 100.
 - **Top Up** sets 100% and returns to the limit when the cable is unplugged.
-- **Discharge** is macOS's drain to the limit. Pressing it while draining stops and holds the
-  current level (the limit is set to that level). Pressing again resumes. The hold clears on
-  unplug or when a new limit is chosen.
+- **Above the limit the level is held, never drained** (Prerak, 10 Oct 2026: "Putting a limit does
+  not mean we have to force discharge it… using AC current should always be preferred"). Plug in
+  at 94% with a 55% limit and macOS's limit is set to the pack's level, so the adapter runs the Mac
+  and the pack stays at 94%. Status: "Holding 94% · above your 55% limit, Discharge runs it down".
+  Until 10 Oct the bare limit was written, and macOS drained to it the moment a limit was applied.
+- **Discharge** is the only way down: it lets macOS drain to the limit (`power.discharge`), cable
+  connected. Pressing it again stops and holds the level reached. It ends by itself at the limit
+  (sailing takes over) and on unplug; a new limit while draining keeps draining to the new one.
+- **The hold uses the pack's own state of charge, not the shown percentage.** powerd compares its
+  limit with `BatteryData.StateOfCharge` in the battery registry; the percentage macOS shows
+  (`BUIC`) runs ahead of it near full. Measured 10 Oct: 91% shown at 89% actual, and a limit of 91
+  charged at 2.3 A until the pack really reached 91. Holding at the shown level would also ratchet:
+  every 1% of that charge raises the shown level and the next target. So the hold is latched while
+  plugged in. It only moves down (after unplugged use), never up. With the hold at the real level
+  the pack read **0 mA at 91%** for two minutes, cable powering the Mac. Sailing's in-band hold uses
+  the same level.
 - **Run on battery** (Power window, "While the cable is connected") is still the adapter-switch
   one-shot from 15 September, independent of the limit.
 

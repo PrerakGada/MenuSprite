@@ -22,6 +22,8 @@
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>After MenuSprite switches your Claude account, it types a continue line into the iTerm2 sessions where Claude Code stopped at a usage limit, so they carry on instead of waiting for the reset. Nothing is read from the terminal.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>The Volume mixer changes an app's volume by passing that app's sound through MenuSprite as it plays. Only apps whose volume or output you change are included, and audio is never recorded or kept.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>

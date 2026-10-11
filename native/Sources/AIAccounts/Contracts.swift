@@ -78,7 +78,8 @@ public struct UsageSnapshot: Sendable, Equatable, Codable {
     /// Claude's split of the current weekly window across surfaces.
     public let breakdown: [UsageBreakdownRow]
     public let fetchedAt: Date
-    /// A non-fatal note, such as serving the last good values while rate limited.
+    /// A non-fatal note, such as serving the last good values while rate limited. Set only when the
+    /// values are the last good ones rather than new: `AutoSwitchPolicy.isStale` relies on that.
     public let notice: String?
 
     public init(provider: AIProvider, accountEmail: String?, plan: String?, windows: [UsageWindow],

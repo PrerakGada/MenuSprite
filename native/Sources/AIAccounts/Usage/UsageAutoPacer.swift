@@ -7,9 +7,13 @@ import Foundation
 ///   (2 → 5 → 10 → 15 → 30 → 60 minutes): if nothing is being used there is nothing new to read.
 /// - **Activity is fast.** A jump of two points or more in any limit, a window that reset, or a
 ///   different account snaps back to the first step. A one-point drift holds the current step.
-/// - **A nearly full session is watched closely.** At 95% of the 5-hour session the steps start at one
-///   minute (so auto-switching reacts in time) and relax only after five quiet minutes; at 90% they
-///   start at two. Sitting at the ceiling for hours does not turn into hundreds of requests.
+/// - **A nearly full limit is watched closely.** At 95% of the 5-hour session or the weekly window the
+///   steps start at one minute (so auto-switching reacts in time) and relax only after five quiet
+///   minutes; at 90% they start at two. The weekly window counts too since 10 Oct 2026: a weekly wall
+///   stops every session as surely as a session wall.
+/// - **At 98% it is read every two minutes and does not relax** for half an hour, even when the figure
+///   holds still: auto-switch moves at 99%, and a quiet minute at 98% says nothing about the next one.
+///   (10 Oct 2026, Prerak: "check every 2 min after it reaches 98 and switch as soon as it hits 99".) Sitting at the ceiling for hours does not turn into hundreds of requests.
 /// - **A known reset is a known change.** When the session window resets before the next planned
 ///   check, the check moves to just after the reset.
 /// - ⌘R restarts the ladder at the first step, whatever the last answer said.
@@ -19,8 +23,10 @@ struct UsageAutoPacer: Sendable {
     static let normal: [TimeInterval] = [120, 300, 600, 900, 1800, 3600]
     static let warm: [TimeInterval] = [120, 120, 120, 300, 600]
     static let hot: [TimeInterval] = [60, 60, 60, 60, 60, 120, 120, 120, 300]
+    static let critical: [TimeInterval] = Array(repeating: 120, count: 15) + [300]
     static let warmPercent = 90.0
     static let hotPercent = 95.0
+    static let criticalPercent = 98.0
     /// A change of this many points in any limit counts as real use.
     static let activePoints = 2.0
     static let minimum: TimeInterval = 30
@@ -53,8 +59,8 @@ struct UsageAutoPacer: Sendable {
 
     static func interval(step: Int, snapshot: UsageSnapshot, now: Date) -> TimeInterval {
         let session = snapshot.window("session")
-        let percent = session?.usedPercent ?? 0
-        let ladder = percent >= hotPercent ? hot : percent >= warmPercent ? warm : normal
+        let percent = max(session?.usedPercent ?? 0, snapshot.window("weekly")?.usedPercent ?? 0)
+        let ladder = percent >= criticalPercent ? critical : percent >= hotPercent ? hot : percent >= warmPercent ? warm : normal
         var wait = ladder[min(max(0, step), ladder.count - 1)]
         if let reset = session?.resetsAt {
             let untilReset = reset.timeIntervalSince(now)

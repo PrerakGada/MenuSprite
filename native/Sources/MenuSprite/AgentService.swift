@@ -96,6 +96,8 @@ final class AgentService {
             case .render: try encode(await render(rendering(args), spec: args["spec"]))
             case .open: try encode(open(decode(SpriteReference.self, args, op)))
             case .refresh: try encode(await refresh(decode(SpriteReference.self, args, op)))
+            case .barrier: try encode(barriers.report(decode(BarrierReport.self, args, op)))
+            case .barriers: try encode(barrierList(decode(BarriersArgs.self, args, op)))
             }
             return AgentResponse(result: result)
         } catch {
@@ -430,6 +432,17 @@ final class AgentService {
                                symbolExists: { SpriteSymbols.exists($0) },
                                spriteDirectory: { override ?? SpriteFolders.directory(for: $0, root: root).path },
                                hasFiles: { id in overrideFiles ?? SpriteFolders.hasFiles(in: SpriteFolders.directory(for: id, root: root)) })
+    }
+
+    /// What agents could not build without code, beside the sprites' folders (the sandbox keeps its own).
+    var barriers: BarrierLog { BarrierLog(url: host.spritesRoot.deletingLastPathComponent().appendingPathComponent("barriers.jsonl")) }
+
+    func barrierList(_ args: BarriersArgs) throws -> BarriersResult {
+        if let id = args.resolve { _ = try barriers.resolve(id, resolution: args.resolution ?? "") }
+        let all = barriers.read()
+        let open = all.filter { $0.resolved == nil }
+        return BarriersResult(barriers: args.all == true || args.resolve != nil ? all : open, open: open.count,
+                              resolved: all.count - open.count, path: barriers.url.path)
     }
 
     func folder(_ id: UUID) -> URL { SpriteFolders.directory(for: id, root: host.spritesRoot) }

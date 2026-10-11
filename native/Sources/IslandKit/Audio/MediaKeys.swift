@@ -64,7 +64,7 @@ public struct IslandKeyModifiers: OptionSet, Sendable {
         contains(.command) || contains(.control) || (contains(.option) && !contains(.shift))
     }
 
-    /// Option and Shift together ask for a quarter step, as macOS's own keys do.
+    /// Option and Shift together ask for a fine step: 1% for volume, a quarter step for brightness.
     public var isFine: Bool { contains(.option) && contains(.shift) }
 }
 

@@ -34,13 +34,23 @@ by hand, because the app rewrites them.
 build does not break it. It merges into existing config files, never replaces them, and copies the previous file
 aside first. Add `--print` to see the change without making it.
 
-| Agent | One command | By hand |
-|---|---|---|
-| Claude Code | `menusprite setup claude` | `claude mcp add --scope user menusprite -- <path to menusprite> mcp` |
-| Codex | `menusprite setup codex` | add the TOML below to `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) |
-| Cursor | `menusprite setup cursor` | merge the JSON below into `~/.cursor/mcp.json`, then reload in Settings → MCP |
-| Claude Desktop | `menusprite setup claude-desktop` | merge the JSON below into `~/Library/Application Support/Claude/claude_desktop_config.json`, then quit and reopen |
-| Antigravity | `menusprite setup antigravity` (prints what to paste) | agent panel → … → MCP Servers → Manage MCP Servers → View raw config (`~/.gemini/antigravity/mcp_config.json`), merge the JSON below, refresh |
+`menusprite setup all` registers it with every agent below that is installed and skips the rest.
+
+| Agent | One command | By hand | Built a sprite end to end (1 Oct 2026) |
+|---|---|---|---|
+| Claude Code | `menusprite setup claude` | `claude mcp add --scope user menusprite -- <path to menusprite> mcp` | yes: 18 blind trials (Sonnet and Opus) and a live demo |
+| Codex CLI | `menusprite setup codex` | the TOML below in `~/.codex/config.toml` (or `$CODEX_HOME`) | yes: 4 blind trials |
+| GitHub Copilot CLI | `menusprite setup copilot` | `copilot mcp add menusprite -- <path to menusprite> mcp` (`~/.copilot/mcp-config.json`) | yes |
+| Antigravity (app and `agy`) | `menusprite setup antigravity` | merge the JSON below into `~/.gemini/config/mcp_config.json`; the app's MCP Servers → View raw config is the same file | yes (`agy`) |
+| Gemini CLI | `menusprite setup gemini` | `gemini mcp add --scope user menusprite <path to menusprite> mcp` | not run: Google no longer serves the CLI on the free individual tier (it needs an API key) |
+| Kimi Code | `menusprite setup kimi` | merge the JSON below into `~/.kimi-code/mcp.json` (or `$KIMI_CODE_HOME`) | not run: no signed-in account here |
+| Grok CLI | `menusprite setup grok` | `grok mcp add --scope user menusprite <path to menusprite> -- mcp` | not run: no signed-in account here |
+| Cursor | `menusprite setup cursor` | merge the JSON below into `~/.cursor/mcp.json`, then reload in Settings → MCP | not run |
+| Claude Desktop | `menusprite setup claude-desktop` | merge the JSON below into `claude_desktop_config.json`, then quit and reopen | not run |
+
+Copilot's entry also carries `"type": "local"` and `"tools": ["*"]`, and Grok's `enabled = true`; `setup` writes each
+agent's own shape. Copilot, Claude Code and others also read a project's `.mcp.json`, so the JSON below in a repository
+gives everyone who opens it there the server.
 
 Codex:
 
@@ -50,7 +60,7 @@ command = "/Applications/MenuSprite.app/Contents/Helpers/menusprite"
 args = ["mcp"]
 ```
 
-Cursor, Claude Desktop, Antigravity and most other MCP clients (keep any other servers under `mcpServers`):
+Cursor, Claude Desktop, Antigravity, Gemini CLI, Kimi Code and most other MCP clients (keep any other servers under `mcpServers`):
 
 ```json
 {

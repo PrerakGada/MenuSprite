@@ -57,6 +57,23 @@ final class SMCReader {
         guard let key = info(name), let reply = message(command: 5, key: name, size: key.size) else { return nil }
         return Self.decode(Array(reply[48..<(48 + key.size)]), type: key.type)
     }
+    /// The pack's own current and voltage, refreshed every second. AppleSmartBattery's
+    /// `InstantAmperage` is republished only about once a minute, so a flow built from it shows
+    /// the previous state for up to a minute after a switch (measured on Nebula, 8 Oct: unplugged,
+    /// `B0AC` read −2,539 mA within 3 s while the registry still said 0 for over 50 s).
+    /// Apple silicon stores these integers little-endian, unlike `decode`'s big-endian order.
+    func batteryFlow() -> (volts: Double, amps: Double)? {
+        func bytes(_ name: String) -> [UInt8]? {
+            guard let key = info(name), key.size == 2, let reply = message(command: 5, key: name, size: 2) else { return nil }
+            return [reply[48], reply[49]]
+        }
+        guard let current = bytes("B0AC"), let voltage = bytes("B0AV") else { return nil }
+        let amps = Double(Int16(bitPattern: UInt16(current[0]) | UInt16(current[1]) << 8)) / 1000
+        let volts = Double(UInt16(voltage[0]) | UInt16(voltage[1]) << 8) / 1000
+        // A pack outside these bounds is a misread key, not a battery.
+        guard (5...30).contains(volts), abs(amps) < 20 else { return nil }
+        return (volts, amps)
+    }
     func keys() -> [String] {
         guard let countValue = read("#KEY"), countValue > 0, countValue <= 16384 else { return [] }
         return (0..<Int(countValue)).compactMap { index in

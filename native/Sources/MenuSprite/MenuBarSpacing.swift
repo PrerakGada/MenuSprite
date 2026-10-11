@@ -73,6 +73,25 @@ enum MenuBarSpacing {
         apply(owned)
     }
 
+    /// Keeps enforcing while MenuSprite runs, not only at its launch. Apps read the keys once, as
+    /// they launch, and at login they launch alongside MenuSprite, so a repair made only then comes
+    /// too late for most of them. On 5 Oct the keys vanished mid-session and the next login drew every
+    /// item at macOS's default. Re-checking at log out, on wake and every ten minutes means the keys
+    /// are right on disk before the next login. Two preference reads each time; no-op without a preset.
+    @MainActor static func startGuarding() {
+        guard guardObservers.isEmpty else { return }
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willPowerOffNotification, NSWorkspace.didWakeNotification,
+                     NSWorkspace.sessionDidBecomeActiveNotification] {
+            guardObservers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { _ in enforce() })
+        }
+        guardTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in enforce() }
+        guardTimer?.tolerance = 120
+    }
+
+    @MainActor private static var guardObservers: [NSObjectProtocol] = []
+    @MainActor private static var guardTimer: Timer?
+
     @discardableResult
     static func apply(_ preset: Preset) -> Bool {
         owned = preset

@@ -130,9 +130,9 @@ private struct VariableCard: View {
     }
     private func summary(_ variable: SpriteVariable) -> String {
         switch variable.source {
-        case .reading(let id): "Reading · \(store.metric(id).name) · key {\(variable.id)}"
-        case .command(let command): "Command · every \(Self.interval(command.interval)) · key {\(variable.id)}"
-        case .constant: "Fixed text · key {\(variable.id)}"
+        case .reading(let id): "Reading · \(store.metric(id).name)"
+        case .command(let command): "Command · every \(Self.interval(command.interval))"
+        case .constant: "Fixed text"
         }
     }
     static func interval(_ seconds: Double) -> String {

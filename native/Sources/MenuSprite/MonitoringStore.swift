@@ -51,6 +51,8 @@ final class MonitoringStore: ObservableObject {
     private var aiLastForced: Date?
     private var aiLastCheck: Date?
     private var aiCheckedIDs: Set<String> = []
+    /// The AI readings the menu bar and open surfaces want right now, nil while none are sampled.
+    private var aiDemand: (ids: Set<String>, interval: Double)?
     private var aiSnapshots: [AIProvider: UsageSnapshot] = [:]
     /// Commands behind sprite variables; they run only while a sprite or the studio needs them.
     let commands = CommandVariableRunner()
@@ -420,14 +422,17 @@ final class MonitoringStore: ObservableObject {
         let wantedCommands = suspended ? (all: [], previews: []) : commandDemandParts()
         commands.setDemand(wantedCommands.all, previews: wantedCommands.previews)
         guard !requested.isEmpty, !suspended else {
-            isSampling = false; aiForcePending = false
+            isSampling = false; aiForcePending = false; aiDemand = nil
             Task { await sampler.idle() }
             return
         }
         isSampling = true
         let aiRequested = requested.filter { $0.key.hasPrefix(AIUsageMetrics.prefix) }
-        if aiRequested.isEmpty { aiForcePending = false }
-        else { startAIUsage(ids: Set(aiRequested.keys), interval: aiRequested.values.min() ?? 60, generation: currentGeneration) }
+        if aiRequested.isEmpty { aiForcePending = false; aiDemand = nil }
+        else {
+            aiDemand = (Set(aiRequested.keys), aiRequested.values.min() ?? 60)
+            startAIUsage(ids: Set(aiRequested.keys), interval: aiRequested.values.min() ?? 60, generation: currentGeneration)
+        }
         let localRequested = requested.filter { !$0.key.hasPrefix(AIUsageMetrics.prefix) }
         guard !localRequested.isEmpty else {
             Task { await sampler.idle() }
@@ -492,12 +497,12 @@ final class MonitoringStore: ObservableObject {
     /// never delays CPU or memory readings. Each pass reads the live logins (cheap) and reuses the
     /// service's five-minute snapshot unless a login changed or Refresh asked for a new fetch.
     /// Sprite intervals shorter than the check interval only re-render these cached values.
-    private func startAIUsage(ids: Set<String>, interval: Double, generation currentGeneration: Int) {
+    private func startAIUsage(ids: Set<String>, interval: Double, generation currentGeneration: Int, immediately: Bool = false) {
         let providers = AIProvider.allCases.filter { provider in ids.contains { AIUsageMetrics.provider(for: $0) == provider } }
         let period = max(Self.aiCheckInterval, interval)
         let usage = self.usage
         // Rescheduling (scrolling the library, toggling a sprite) must not turn into extra login checks.
-        let firstWait = aiForcePending || !ids.isSubset(of: aiCheckedIDs)
+        let firstWait = immediately || aiForcePending || !ids.isSubset(of: aiCheckedIDs)
             ? 0 : max(0, period - Date().timeIntervalSince(aiLastCheck ?? .distantPast))
         aiTask = Task { [weak self] in
             if firstWait > 0 {
@@ -531,6 +536,16 @@ final class MonitoringStore: ObservableObject {
                 do { try await Task.sleep(for: .milliseconds(Int(period * 1000))) } catch { return }
             }
         }
+    }
+
+    /// The AI Accounts board just loaded usage into the shared service cache (opening, ⌘R, its refresh
+    /// button or its own timer): show those figures in the menu bar now rather than at the next pass,
+    /// which could be half a minute or a whole refresh interval away. Reads the cache only — it never
+    /// asks the providers again, so it costs no request against their rate limits.
+    func syncAIUsage() {
+        guard !suspended, let demand = aiDemand else { return }
+        aiTask?.cancel()
+        startAIUsage(ids: demand.ids, interval: demand.interval, generation: generation, immediately: true)
     }
 
     /// Readings for limits a provider reports beside its session and weekly windows — a model-scoped

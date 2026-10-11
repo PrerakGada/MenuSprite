@@ -54,7 +54,7 @@ import Testing
 }
 
 @Test func everyVerbInTheContractExistsAndHasHelp() {
-    let contract = ["guide", "schema", "readings", "list", "get", "validate", "apply", "preview", "run", "refresh", "examples", "remove",
+    let contract = ["guide", "schema", "readings", "list", "get", "validate", "apply", "preview", "run", "refresh", "examples", "barrier", "barriers", "remove",
                     "enable", "disable", "show", "hide", "side", "open", "mcp", "setup", "version", "help"]
     #expect(Arguments.verbs.map(\.name) == contract)
     for verb in Arguments.verbs { #expect(Help.text(for: verb).hasPrefix("Usage: menusprite \(verb.name)")) }
@@ -73,4 +73,13 @@ import Testing
     #expect(try Arguments.parse(["examples"]).words.isEmpty)
     #expect(try Arguments.parse(["refresh", "GitHub", "PRs"]).joined == "GitHub PRs")
     #expect(throws: UsageError.self) { try Arguments.parse(["refresh"]) }
+}
+
+@Test func barrierTakesWhatIsMissingAsWordsAndTheRestAsOptions() throws {
+    let invocation = try Arguments.parse(["barrier", "boards", "have", "no", "text", "input", "--asked", "a todo box", "--area", "board",
+                                          "--suggest", "an input block"])
+    #expect(invocation.joined == "boards have no text input")
+    #expect(invocation.option("asked") == "a todo box" && invocation.option("area") == "board" && invocation.option("suggest") == "an input block")
+    #expect(try Arguments.parse(["barriers", "resolve", "b12", "0.6", "adds", "input"]).words == ["resolve", "b12", "0.6", "adds", "input"])
+    #expect(try Arguments.parse(["barriers", "--all"]).has("all"))
 }

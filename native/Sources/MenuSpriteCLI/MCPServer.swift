@@ -20,13 +20,18 @@ final class MCPServer: @unchecked Sendable {
         returns diagnostics, what each value and script block showed, and preview images in dark and light mode), \
         look at the images and iterate until it is right. Pass values (stand-ins such as {"free": 12}) to \
         apply_sprite or preview_sprite to see each branch of your rules without making it happen. To change an \
-        existing sprite, get_sprite it, edit the spec and apply_sprite it again. Ask the user before remove_sprite.
+        existing sprite, get_sprite it, edit the spec and apply_sprite it again. Ask the user before remove_sprite. \
+        When something the user asks for cannot be expressed in a spec (it would need a change to MenuSprite's code), \
+        never edit MenuSprite's code or its files: tell the user plainly what is missing, build the closest honest \
+        version if one is worth having (saying how it differs), and record it with report_barrier.
         """
 
     let tools: MCPTools
     let version: String
     private let lock = NSLock()
     private var cancelled: Set<JSONValue> = []
+    /// The client's own name from `initialize` (claude-code, codex-mcp-client…), recorded with any barrier it reports.
+    private var clientName: String?
 
     init(tools: MCPTools, version: String) {
         self.tools = tools
@@ -98,7 +103,7 @@ final class MCPServer: @unchecked Sendable {
         case "tools/call":
             guard let name = params["name"]?.string else { return Self.failure(id: id, code: -32602, "tools/call needs a tool name.") }
             guard MCPTools.names.contains(name) else { return Self.failure(id: id, code: -32602, "Unknown tool: \(name).") }
-            return Self.success(id: id, tools.call(name, params["arguments"] ?? .object([])))
+            return Self.success(id: id, tools.call(name, params["arguments"] ?? .object([]), agent: lock.withLock { clientName }))
         case "resources/list":
             return Self.success(id: id, .object([JSONMember("resources", MCPTools.resources)]))
         case "resources/templates/list":
@@ -122,7 +127,8 @@ final class MCPServer: @unchecked Sendable {
     }
 
     private func initialize(_ params: JSONValue) -> JSONValue {
-        .object([
+        if let name = params["clientInfo"]?["name"]?.string { lock.withLock { clientName = name } }
+        return .object([
             JSONMember("protocolVersion", .string(Self.negotiate(params["protocolVersion"]?.string))),
             JSONMember("capabilities", .object([
                 JSONMember("tools", .object([JSONMember("listChanged", false)])),

@@ -404,12 +404,7 @@ struct NodeInspector: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .controlSize(.small)
         } else {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Nothing selected").font(.headline)
-                Text("Click any part of the sprite above, or a piece in the list, to change it. Right-click a piece to split it into a row or a column, merge texts, wrap or unwrap.")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Button("Select the whole sprite") { model.selection = model.design.root.id }
-            }
+            QuickEdit(model: model, store: store)
         }
     }
 
@@ -625,5 +620,117 @@ struct SegmentEditor: View {
         Button { var next = segments; if next.indices.contains(index) { next.remove(at: index); setSegments(next) } } label: {
             Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
         }.buttonStyle(.plain)
+    }
+}
+
+
+// MARK: - Quick edit
+
+/// What the studio shows before anything is selected: the handful of changes most people want,
+/// in plain words, with no tree to understand first. Clicking a piece above still opens every setting.
+private struct QuickEdit: View {
+    @ObservedObject var model: StudioModel
+    @ObservedObject var store: MonitoringStore
+
+    private var labels: [DesignNode] {
+        model.design.root.flattened.filter { $0.kind == .text && $0.referencedVariables.isEmpty }
+    }
+    private var icons: [DesignNode] { model.design.root.flattened.filter { $0.kind == .icon } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Change this sprite").font(.system(size: 15, weight: .semibold))
+            let readings = model.design.variables.filter { $0.readingID != nil }
+            if !readings.isEmpty {
+                InspectorField(readings.count == 1 ? "Shows" : "Shows these") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(readings) { variable in readingMenu(variable) }
+                    }
+                }
+            }
+            if !labels.isEmpty {
+                InspectorField(labels.count == 1 ? "Label" : "Labels") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(labels) { label in
+                            TextField("Label", text: Binding(
+                                get: { TextTemplate.string(model.design.node(label.id)?.segments ?? []) },
+                                set: { value in model.edit(coalesce: true) { $0.root.update(label.id) { $0.segments = [.literal(value)] } } }))
+                                .textFieldStyle(.roundedBorder).frame(maxWidth: 200)
+                        }
+                    }
+                }
+            }
+            InspectorField("Colour") {
+                ColorChoice(value: model.node(model.design.root.id, \.style.color, fallback: "auto"), allowInherit: false)
+            }
+            InspectorField("Size") {
+                HStack {
+                    Button { resize(-1) } label: { Label("Smaller", systemImage: "textformat.size.smaller") }
+                    Button { resize(1) } label: { Label("Larger", systemImage: "textformat.size.larger") }
+                }
+            }
+            InspectorField("Icon") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Show an icon", isOn: Binding(get: { !icons.isEmpty }, set: { show in setIcon(show) }))
+                    if let icon = icons.first {
+                        SymbolPicker(symbol: model.node(icon.id, \.symbol, fallback: "star")).frame(height: 150)
+                    }
+                }
+            }
+            Text("For anything else, click a part of the sprite above. To change what opens when the sprite is clicked, switch to Board at the top.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A menu of every everyday reading, by category, that swaps what this value shows.
+    private func readingMenu(_ variable: SpriteVariable) -> some View {
+        let groups = Dictionary(grouping: store.catalog.filter { !$0.advanced }, by: \.group)
+        return Menu {
+            ForEach(MetricGroup.allCases, id: \.self) { group in
+                if let metrics = groups[group], !metrics.isEmpty {
+                    Menu(group.rawValue) {
+                        ForEach(metrics, id: \.id) { metric in
+                            Button(metric.name) { swap(variable.id, to: metric) }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label(variable.readingID.map { store.metric($0).name } ?? variable.name,
+                  systemImage: variable.readingID.map { store.metric($0).group.icon } ?? "number")
+        }
+        .fixedSize()
+    }
+
+    private func swap(_ id: String, to metric: Metric) {
+        model.edit { design in
+            guard let index = design.variables.firstIndex(where: { $0.id == id }) else { return }
+            design.variables[index].source = .reading(metric: metric.id)
+            design.variables[index].name = metric.name
+        }
+    }
+    /// Every text one point smaller or larger, so the sprite keeps its proportions.
+    private func resize(_ delta: Double) {
+        model.edit { design in
+            func walk(_ node: inout DesignNode) {
+                if node.kind == .text || node.kind == .icon {
+                    node.style.size = min(22, max(6, (node.style.size ?? (node.kind == .icon ? 14 : 12)) + delta))
+                }
+                for index in node.children.indices { walk(&node.children[index]) }
+            }
+            walk(&design.root)
+        }
+    }
+    private func setIcon(_ show: Bool) {
+        model.edit { design in
+            if show {
+                var icon = DesignNode(kind: .icon, name: "Icon", symbol: model.config.symbol); icon.style.size = 14
+                if design.root.kind == .row { design.root.children.insert(icon, at: 0) }
+                else { design.insert(icon, at: .left, of: design.root.id) }
+            } else {
+                for icon in design.root.flattened where icon.kind == .icon { design.delete(icon.id) }
+            }
+        }
     }
 }

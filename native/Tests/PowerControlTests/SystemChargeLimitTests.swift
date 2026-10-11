@@ -106,8 +106,12 @@ private final class LEDHardware: PowerHardware {
     // Once a recharge starts it runs to the limit, through the band.
     #expect(Sailing.target(limit: 55, band: 5, percent: 52, recharging: true) == (55, true))
     #expect(Sailing.target(limit: 55, band: 5, percent: 55, recharging: true) == (55, false))
-    // Above the limit macOS drains to it as before; off means an exact limit.
-    #expect(Sailing.target(limit: 55, band: 5, percent: 70, recharging: false) == (55, false))
+    // Above the limit the level is held — the adapter runs the Mac — unless Discharge was pressed.
+    #expect(Sailing.target(limit: 55, band: 5, percent: 94, recharging: false) == (94, false))
+    #expect(Sailing.target(limit: 55, band: 0, percent: 94, recharging: false) == (94, false))
+    #expect(Sailing.target(limit: 55, band: 5, percent: 94, recharging: false, drain: true) == (55, false))
+    #expect(Sailing.target(limit: 55, band: 5, percent: 55, recharging: false, drain: true) == (55, false))
+    // Off means an exact limit.
     #expect(Sailing.target(limit: 55, band: 0, percent: 54, recharging: false) == (55, false))
     #expect(Sailing.target(limit: 55, band: 5, percent: nil, recharging: false) == (55, false))
 }

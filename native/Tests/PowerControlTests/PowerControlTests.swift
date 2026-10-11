@@ -97,8 +97,13 @@ private func recoveryURL() throws -> URL {
     defer { try? FileManager.default.removeItem(at:url.deletingLastPathComponent()) }
     let c = PowerController(hardware:h,recoveryURL:url,execute:{ _,_ in "" })
     _ = c.handle(.init(.battery,mode:.discharge))
-    c.lastHeartbeat = .distantPast; c.tick()
+    c.lastHeartbeat = -.infinity; c.tick()
     #expect(c.mode == .off && !c.needsRecovery && h.values["CHIE"] == [0])
+    #expect(c.lastError == PowerController.disconnected)
+    // The app being heard from again ends the notice; a wake starts a fresh window.
+    #expect(c.handle(.init(.heartbeat)).error == nil)
+    c.lastHeartbeat = -.infinity; c.didWake(); c.tick()
+    #expect(c.lastError == nil)
     _ = c.handle(.init(.battery,mode:.discharge)); h.plugged = false; c.tick()
     #expect(c.mode == .off && !c.needsRecovery && h.values["CHIE"] == [0])
 }
@@ -125,7 +130,7 @@ private func recoveryURL() throws -> URL {
         return ""
     })
     #expect(c.handle(.init(.startLid)).lidActive && disabled)
-    c.lastHeartbeat = .distantPast; c.tick()
+    c.lastHeartbeat = -.infinity; c.tick()
     #expect(!disabled && !c.needsRecovery)
 }
 

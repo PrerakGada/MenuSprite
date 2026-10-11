@@ -85,8 +85,14 @@ final class Capture: @unchecked Sendable {
 }
 
 /// A fresh folder per test, so parallel tests never share files.
+/// One folder per test run holds every test's scratch folder, and goes when the run ends.
+let scratchRoot: String = {
+    atexit { try? FileManager.default.removeItem(atPath: NSTemporaryDirectory() + "menusprite-cli-tests-\(getpid())") }
+    return NSTemporaryDirectory() + "menusprite-cli-tests-\(getpid())"
+}()
+
 func scratchFolder() throws -> String {
-    let path = NSTemporaryDirectory() + "menusprite-cli-tests-" + UUID().uuidString
+    let path = scratchRoot + "/" + UUID().uuidString
     try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
     return (path as NSString).resolvingSymlinksInPath
 }

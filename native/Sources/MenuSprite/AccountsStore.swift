@@ -47,6 +47,9 @@ final class AccountsStore: ObservableObject {
     private(set) var reloadRequests = 0
     @Published private(set) var claudeSwitcherRunning = false
     @Published private(set) var autoSwitchStatus: [AIProvider: String] = [:]
+    /// What the last pass that told stopped Claude Code sessions to carry on did.
+    @Published private(set) var resumeStatus: String?
+    @Published private(set) var resumeAfterSwitch = ResumePreference.isEnabled
     @Published var message: String?
     /// When the board last finished asking for usage, and when it will ask again while it stays open.
     @Published private(set) var lastReloadAt: Date?
@@ -65,11 +68,23 @@ final class AccountsStore: ObservableObject {
     private let usageSource: any UsageFetching
     private let spendSource: (any SpendEstimating)?
     private let didSwitch: (AIProvider) -> Void
+    /// Called each time the board finishes loading usage, so the menu bar can show the same figures at once.
+    var usageLoaded: (() -> Void)?
     private var loadTask: Task<Void, Never>?
     private var autoReloadTask: Task<Void, Never>?
     private var autoSwitchTask: Task<Void, Never>?
     private var signInTasks: [AIProvider: Task<Void, Never>] = [:]
     private var lastAutoAttempt: [AIProvider: Date] = [:]
+    private let walls = ClaudeWallScanner()
+    private var resumeTask: Task<Void, Never>?
+    /// Claude auto-switch is on and MenuSprite owns it, as of the last check.
+    private var watchesWalls = false
+    /// When the Claude login last changed under the running sessions.
+    private var lastClaudeSwitch: Date?
+    /// The newest wall auto-switch has already acted on, so one refusal triggers one check.
+    private var handledWall: Date?
+    /// Session ID → the wall it was told to carry on from, so no session is typed into twice.
+    private var resumedWalls: [String: Date] = [:]
 
     init(switcher: AccountSwitcher, usage: any UsageFetching, spend: (any SpendEstimating)? = nil,
          didSwitch: @escaping (AIProvider) -> Void) {
@@ -153,6 +168,7 @@ final class AccountsStore: ObservableObject {
             guard !Task.isCancelled else { return }
             isLoadingUsage = false
             lastReloadAt = Date()
+            usageLoaded?()
             autoDue = await source.nextRefreshDate()
             scheduleAutoReload()
             // Scanned from local logs on its own schedule, so it never delays the account rows — and
@@ -230,7 +246,7 @@ final class AccountsStore: ObservableObject {
             guard let self else { return }
             busy.remove(provider)
             message = text
-            if switched { didSwitch(provider) }
+            if switched { self.switched(provider) }
             reload(force: false)
         }
     }
@@ -336,7 +352,7 @@ final class AccountsStore: ObservableObject {
             signingIn.remove(provider)
             signInTasks[provider] = nil
             message = text
-            if added { didSwitch(provider) }
+            if added { self.switched(provider) }
             if isOpen { reload(force: false) }
         }
     }
@@ -345,26 +361,110 @@ final class AccountsStore: ObservableObject {
 
     // MARK: Auto-switch
 
-    /// Checks every five minutes. Does nothing for providers without auto-switch, and nothing at all
-    /// while Claude Switcher runs, so the two apps never switch the same login.
+    /// Checks usage every five minutes, every minute once a window passes 90%, and at once when a
+    /// Claude Code session is refused for the session or weekly limit (looked for every 30 seconds,
+    /// only while Claude auto-switch is on). Does nothing for providers without auto-switch, and
+    /// nothing at all while Claude Switcher runs, so the two apps never switch the same login.
     func startAutoSwitchMonitor() {
         guard autoSwitchTask == nil else { return }
         autoSwitchTask = Task { [weak self] in
+            var due = Date()
             while !Task.isCancelled {
                 do {
                     guard let store = self else { return }
-                    await store.autoSwitchTick()
+                    let wall = await store.freshWall()
+                    if wall || Date() >= due {
+                        due = Date().addingTimeInterval(await store.autoSwitchTick(hitWall: wall))
+                    }
                 }
-                try? await Task.sleep(for: .seconds(AutoSwitchPolicy.cadence))
+                try? await Task.sleep(for: .seconds(Self.wallCheck))
             }
         }
     }
+
+    private static let wallCheck: TimeInterval = 30
+    /// Claude Code caches its keychain read for 30 seconds; a session told to carry on sooner would
+    /// send its request with the old login and stop at the wall again.
+    private static let loginSettles: TimeInterval = 40
+    private static let continueText = "MenuSprite switched Claude Code to another account, so usage is available again. Continue the task you were working on when the limit was reached; do not repeat work that is already complete."
+
+    /// True when a session has just been refused for the session or weekly limit on the login that is
+    /// live now: refused after any switch had settled, within the last three minutes, not acted on yet.
+    private func freshWall() async -> Bool {
+        guard watchesWalls else { return false }
+        let now = Date()
+        let settled = lastClaudeSwitch.map { $0.addingTimeInterval(Self.loginSettles) } ?? .distantPast
+        let newest = await walls.stoppedSessions().map(\.wall)
+            .filter { $0.isAccountWide && $0.at > settled && now.timeIntervalSince($0.at) < 180 && ($0.resetsAt ?? .distantFuture) > now }
+            .map(\.at).max()
+        guard let newest, newest > (handledWall ?? .distantPast) else { return false }
+        handledWall = newest
+        return true
+    }
+
+    /// Every way the live login changes ends here: the menu bar is told, and Claude Code sessions that
+    /// stopped at a limit are told to carry on once the new login has reached them.
+    private func switched(_ provider: AIProvider) {
+        didSwitch(provider)
+        guard provider == .claude else { return }
+        lastClaudeSwitch = Date()
+        guard resumeAfterSwitch else { return }
+        resumeTask?.cancel()
+        resumeTask = Task { [weak self] in
+            // Twice: the second pass catches sessions whose request was already in flight on the old login.
+            for wait in [Self.loginSettles, 60] {
+                try? await Task.sleep(for: .seconds(wait))
+                guard !Task.isCancelled, let self else { return }
+                await self.resumeStoppedSessions()
+            }
+        }
+    }
+
+    func setResumeAfterSwitch(_ enabled: Bool) {
+        ResumePreference.isEnabled = enabled
+        resumeAfterSwitch = enabled
+        if !enabled { resumeTask?.cancel(); resumeTask = nil }
+    }
+
+    /// Types the continue line into each session stopped at a wall from before the new login settled.
+    /// A wall after that came from the new account itself, so that session is left alone.
+    private func resumeStoppedSessions() async {
+        guard resumeAfterSwitch, let switchedAt = lastClaudeSwitch else { return }
+        let now = Date()
+        let stopped = await walls.stoppedSessions().filter { session in
+            session.wall.at <= switchedAt.addingTimeInterval(Self.loginSettles)
+                && (session.wall.resetsAt ?? .distantFuture) > now
+                && resumedWalls[session.sessionID] != session.wall.at
+        }
+        guard !stopped.isEmpty else { return }
+        let reachable = stopped.filter { $0.tty != nil }
+        let outcome = await TerminalTyper.type(Self.continueText, into: Set(reachable.compactMap(\.tty)))
+        let time = now.formatted(date: .omitted, time: .shortened)
+        switch outcome {
+        case .typed(let reached):
+            for session in reachable where session.tty.map(reached.contains) == true { resumedWalls[session.sessionID] = session.wall.at }
+            let unreached = stopped.count - reachable.filter { $0.tty.map(reached.contains) == true }.count
+            var text = "Told \(Self.sessions(stopped.count - unreached)) stopped at the limit to carry on at \(time)."
+            if unreached > 0 { text += " \(Self.sessions(unreached)) not in iTerm2 still wait; type “continue” there." }
+            resumeStatus = text
+        case .iTermNotRunning:
+            resumeStatus = "\(Self.sessions(stopped.count)) stopped at the limit, but iTerm2 is not running; type “continue” in each."
+        case .notAllowed:
+            resumeStatus = "\(Self.sessions(stopped.count)) stopped at the limit. Allow MenuSprite to control iTerm2 in System Settings › Privacy & Security › Automation, or type “continue” in each."
+        case .failed(let reason):
+            resumeStatus = "Could not tell \(Self.sessions(stopped.count)) to carry on: \(reason)"
+        }
+    }
+
+    private static func sessions(_ count: Int) -> String { count == 1 ? "1 Claude Code session" : "\(count) Claude Code sessions" }
 
     func stop() {
         autoReloadTask?.cancel()
         autoReloadTask = nil
         autoSwitchTask?.cancel()
         autoSwitchTask = nil
+        resumeTask?.cancel()
+        resumeTask = nil
         loadTask?.cancel()
         loadTask = nil
         for task in signInTasks.values { task.cancel() }
@@ -377,17 +477,23 @@ final class AccountsStore: ObservableObject {
         startAutoSwitchMonitor()
     }
 
-    private func autoSwitchTick() async {
+    /// Returns how long to wait before the next ordinary check.
+    private func autoSwitchTick(hitWall: Bool = false) async -> TimeInterval {
         let switcher = self.switcher
         let overview = await Task.detached(priority: .utility) { switcher.overview() }.value
         let config = overview.config
         let running = Self.claudeSwitcherIsRunning()
         claudeSwitcherRunning = running
+        watchesWalls = config.isAutoSwitchEnabled(.claude) && !running
+        var wait = AutoSwitchPolicy.cadence
         for provider in AIProvider.allCases {
             guard config.isAutoSwitchEnabled(provider), !running else { continue }
             guard !busy.contains(provider), signInTasks[provider] == nil, let activeEmail = overview.activeEmail(provider) else { continue }
-            guard case .success(let activeUsage) = await usageSource.activeUsage(provider, force: false),
-                  AutoSwitchPolicy.isExhausted(activeUsage, threshold: config.autoSwitchThreshold) else { continue }
+            let wall = hitWall && provider == .claude
+            let usage = await usageSource.activeUsage(provider, force: false)
+            let activeUsage: UsageSnapshot? = if case .success(let snapshot) = usage { snapshot } else { nil }
+            wait = min(wait, AutoSwitchPolicy.nextCheck(after: activeUsage))
+            guard wall || AutoSwitchPolicy.isExhausted(activeUsage, threshold: AutoSwitchPolicy.switchPoint(config.autoSwitchThreshold, for: activeUsage)) else { continue }
             if let last = lastAutoAttempt[provider], Date().timeIntervalSince(last) < AutoSwitchPolicy.cooldown { continue }
             var candidates: [String: UsageSnapshot] = [:]
             for account in config.accounts(for: provider) where account.email != activeEmail && overview.savedCredentials.contains(account.id) {
@@ -400,7 +506,7 @@ final class AccountsStore: ObservableObject {
                 provider: provider, enabled: true, threshold: config.autoSwitchThreshold,
                 claudeSwitcherRunning: Self.claudeSwitcherIsRunning(), activeEmail: activeEmail, activeUsage: activeUsage,
                 lastAttempt: lastAutoAttempt[provider], now: now, accounts: config.accounts, usage: candidates,
-                hasCredential: { overview.savedCredentials.contains($0.id) })
+                hasCredential: { overview.savedCredentials.contains($0.id) }, hitWall: wall)
             let time = now.formatted(date: .omitted, time: .shortened)
             switch decision {
             case .switchTo(let email):
@@ -409,8 +515,10 @@ final class AccountsStore: ObservableObject {
                 do {
                     _ = try await switcher.switchAccount(provider, to: email)
                     await usageSource.invalidate(provider)
-                    didSwitch(provider)
-                    autoSwitchStatus[provider] = "Auto-switched from \(activeEmail) to \(email) at \(time)."
+                    switched(provider)
+                    let why = wall ? " A session was refused for the limit."
+                        : AutoSwitchPolicy.isStale(activeUsage) ? " Usage could not be refreshed, so it switched at \(Int(AutoSwitchPolicy.switchPoint(config.autoSwitchThreshold, for: activeUsage)))%." : ""
+                    autoSwitchStatus[provider] = "Auto-switched from \(activeEmail) to \(email) at \(time).\(why)"
                 } catch {
                     autoSwitchStatus[provider] = "Auto-switch to \(email) failed at \(time): \(error.localizedDescription)"
                 }
@@ -423,6 +531,7 @@ final class AccountsStore: ObservableObject {
                 break
             }
         }
+        return wait
     }
 
     // MARK: Helpers

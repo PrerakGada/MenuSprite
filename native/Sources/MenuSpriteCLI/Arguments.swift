@@ -81,6 +81,18 @@ enum Arguments {
              notes: "For a script that finished a long job (one a button started) to update the menu bar at once. Commands see MENUSPRITE_TRIGGER=refresh."),
         Verb(name: "examples", usage: "examples [name]", summary: "The example sprites, or one example's spec (JSON) to start from.",
              maximum: 1),
+        Verb(name: "barrier", usage: "barrier <what is missing> --asked <what the person wanted> [--workaround <text>] [--suggest <text>] [--area <area>] [--sprite <name>] [--agent <name>]",
+             summary: "Record something MenuSprite cannot do without a code change.", minimum: 1, maximum: nil,
+             values: ["asked", "workaround", "suggest", "area", "sprite", "agent"],
+             notes: """
+                 For agents: when a request cannot be expressed in a spec, tell the person what is missing, build the closest \
+                 honest version if one is worth having, and record it here instead of editing MenuSprite. Areas: face, board, \
+                 values, rules, actions, data, tools, other. Check `menusprite barriers` first and reuse its wording when it is \
+                 the same gap.
+                 """),
+        Verb(name: "barriers", usage: "barriers [--all] | barriers resolve <id> <how it was resolved>",
+             summary: "What agents could not build without a code change (open ones), or close one.",
+             maximum: nil, flags: ["all"]),
         Verb(name: "remove", usage: "remove <sprite>", summary: "Delete a sprite and its folder.", minimum: 1, maximum: nil),
         Verb(name: "enable", usage: "enable <sprite>", summary: "Switch a sprite on.", minimum: 1, maximum: nil),
         Verb(name: "disable", usage: "disable <sprite>", summary: "Switch a sprite off: nothing of it runs.", minimum: 1, maximum: nil),
@@ -90,7 +102,7 @@ enum Arguments {
              minimum: 2, maximum: nil),
         Verb(name: "open", usage: "open <sprite>", summary: "Pop the sprite's board open on screen.", minimum: 1, maximum: nil),
         Verb(name: "mcp", usage: "mcp", summary: "Serve MCP on stdio, for AI agents (see setup)."),
-        Verb(name: "setup", usage: "setup <claude|codex|cursor|claude-desktop|antigravity> [--print]",
+        Verb(name: "setup", usage: "setup <claude|codex|copilot|gemini|antigravity|kimi|grok|cursor|claude-desktop|all> [--print]",
              summary: "Register the MCP server with an agent; --print shows the change without making it.",
              maximum: 1, flags: ["print"]),
         Verb(name: "version", usage: "version", summary: "This command's version, and the running app's."),
@@ -173,7 +185,7 @@ enum Help {
         <sprite> is a name (any case), an id, or an id prefix of at least 4 characters.
         A spec is a JSON file, or - for standard input. Every command takes --json for the raw answer.
         Exit status: 0 done, 1 a spec, argument or command problem, 2 MenuSprite is not available.
-        Agents: menusprite setup claude (or codex, cursor, claude-desktop, antigravity). Start with: menusprite guide
+        Agents: menusprite setup all (or claude, codex, copilot, gemini, antigravity, kimi, grok, cursor, claude-desktop). Start with: menusprite guide
 
         """
     }

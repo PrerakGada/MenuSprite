@@ -228,6 +228,8 @@ final class IslandSystemAudio: ObservableObject {
 
     var setVolume: (Double) -> Void = { _ in }
     var setMuted: (Bool) -> Void = { _ in }
+    /// A volume slider was let go: sounds macOS's volume tone when its setting asks for it.
+    var volumeEditEnded: () -> Void = {}
     var selectOutput: (IslandAudioDevice) -> Void = { _ in }
     var selectInput: (IslandAudioDevice) -> Void = { _ in }
     var setInputVolume: (Double) -> Void = { _ in }

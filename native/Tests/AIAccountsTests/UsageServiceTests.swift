@@ -452,3 +452,16 @@ private func snapshot(session: Double, weekly: Double = 10, resetsIn: TimeInterv
     #expect(tokens.contains("Bearer hemali-rotated"))
     #expect(live.accountEmail == "hemali@example.com")
 }
+
+@Test func autoPacingWatchesANearlyFullWeekClosely() {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    var pacer = UsageAutoPacer()
+    #expect(pacer.observe(snapshot(session: 10, weekly: 96, at: now), now: now) == 60)
+    var warm = UsageAutoPacer()
+    #expect(warm.observe(snapshot(session: 10, weekly: 91, at: now), now: now) == 120)
+    // From 98% every two minutes, held for half an hour of unchanged figures, then five.
+    var critical = UsageAutoPacer()
+    var waits: [TimeInterval] = []
+    for _ in 0..<17 { waits.append(critical.observe(snapshot(session: 10, weekly: 98, at: now), now: now)) }
+    #expect(waits == Array(repeating: 120, count: 15) + [300, 300])
+}

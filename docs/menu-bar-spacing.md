@@ -69,3 +69,19 @@ one means an Automation consent prompt and a change to the public build.
   values (`showMenuItemsOnHover`, `trailingItemPreferredPositions`, `animationSpeed`, …). Others report the
   same (jiunbae/settings PR #25: restarting MenuBarAgent does not help). The only route left is to take
   items out of Apple's group: hide them and draw MenuSprite sprites in their place.
+
+## The keys vanished, 5 October
+
+After a logout/reboot on 5 Oct every third-party item drew at macOS's default (Accessibility frames:
+6 pt gaps). Both keys were gone from the current host's plist, and MenuSprite owned no preset, so the
+launch-time `enforce()` had nothing to restore. Nothing on record deleted them: no agent session, no
+running app's binary mentions them, no local snapshot, no log line. Repaired by writing 0/0 and setting
+the owned preset to None. A relaunched app (Screenroll) went from 6 pt to −2 pt at once, and after the
+next reboot every third-party item sat at −2 pt. The two system gaps were unchanged: 7 pt before
+Control Center and 16 pt before the clock.
+
+`MenuBarSpacing.startGuarding()` now re-runs `enforce()` at log out (`willPowerOff`), on wake, on
+session switch and every ten minutes. This matters because a repair made only at MenuSprite's launch is
+too late for the apps that start alongside it at login. Bartender 7's release notes for macOS 27
+mention hiding system items (clock, Control Center), not tightening their gaps. That matches the
+1 Oct finding.

@@ -129,30 +129,28 @@ final class PowerValidation {
                 store.setSailing(0)
                 // Two helper writes back to back: the second lands while the first is in flight and
                 // must be queued, not dropped.
+                // Above 60 the level is held instead, which is just as much a value PowerUI refuses.
                 store.setLimit(61); store.setLimit(60); try await settle(); state("limit 60")
-                check("A limit PowerUI refuses (60) is taken through the helper", store.systemLimit == 60)
-                try await awaitEnforced(60); state("limit 60, powerd")
-                check("powerd enforces 60", store.enforced?.limit == 60)
+                check("A limit PowerUI refuses is taken through the helper", store.systemLimit == store.desiredSystemLimit)
+                try await awaitEnforced(store.desiredSystemLimit); state("limit 60, powerd")
+                check("powerd enforces it", store.enforced?.limit == store.desiredSystemLimit)
 
                 if store.snapshot.pluggedIn == true {
                     store.toggleTopUp(); try await settle(); state("top up")
                     check("Top up raises macOS's limit to 100", store.systemLimit == 100)
                     store.toggleTopUp(); try await settle(); state("top up stopped")
-                    check("Stopping top up restores the limit", store.systemLimit == 60)
+                    check("Stopping top up restores the limit", store.systemLimit == store.desiredSystemLimit)
                     // Leaving 100 is where macOS used to fall back to its own saved 80.
-                    try await awaitEnforced(60)
+                    try await awaitEnforced(store.desiredSystemLimit)
                     state("after top up, powerd")
-                    check("After top up powerd enforces the limit again, not macOS's saved 80", store.enforced?.limit == 60)
-                    // Draining is only expected when the pack is above the 60% test limit.
-                    if (store.snapshot.percent ?? 0) > 60 {
-                        for _ in 0..<5 where !store.isDraining { try await settle() }
-                        check("macOS is draining toward the limit with the cable in", store.isDraining)
-                    }
-                    if store.isDraining, let percent = store.snapshot.percent {
-                        store.toggleDischarge(); try await settle(); state("discharge paused")
-                        check("Stopping a discharge holds the current level", store.holdLevel == percent && store.systemLimit == percent)
-                        store.toggleDischarge(); try await settle(); state("discharge resumed")
-                        check("Resuming drains to the limit again", store.holdLevel == nil && store.systemLimit == 60)
+                    check("After top up powerd enforces the limit again, not macOS's saved 80", store.enforced?.limit == store.desiredSystemLimit)
+                    // Above the 60% test limit the level is held, and drains only once Discharge is pressed.
+                    if let percent = store.snapshot.percent, percent > 60 {
+                        check("Above the limit macOS holds the level instead of draining", store.isHoldingAboveLimit && store.systemLimit == store.desiredSystemLimit && store.desiredSystemLimit <= percent)
+                        store.toggleDischarge(); try await settle(); state("discharge")
+                        check("Discharge drains to the limit", store.dischargeActive && store.systemLimit == 60)
+                        store.toggleDischarge(); try await settle(); state("discharge stopped")
+                        check("Stopping a discharge holds the current level", !store.dischargeActive && store.systemLimit == store.desiredSystemLimit)
                     }
                     store.setLEDControl(true); try await settle(); state("led on")
                     let flow = BatteryHardware().batteryFlow()

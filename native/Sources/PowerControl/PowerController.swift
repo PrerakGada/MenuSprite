@@ -25,7 +25,13 @@ public final class PowerController {
     var recoveryUnavailable = false
     var mode = BatteryMode.off
     var band = ChargeBand()
-    var lastHeartbeat = Date()
+    /// When the app was last heard from, in awake time (`systemUptime` stops while the Mac sleeps).
+    /// Wall-clock time counted every sleep as silence: on 8 Oct a tick after a dark wake saw
+    /// minutes without a heartbeat from an app that was running fine, and stopped the controls.
+    var lastHeartbeat = ProcessInfo.processInfo.systemUptime
+    static let disconnected = "Controls stopped because MenuSprite disconnected"
+    /// Dark wakes run this daemon but barely run the app, so every wake starts a fresh window.
+    public func didWake() { lastHeartbeat = ProcessInfo.processInfo.systemUptime }
     var deadline: Date?
     public var lastError: String?
     var timer: Timer?
@@ -187,7 +193,7 @@ public final class PowerController {
             do { try restoreFans() } catch { lastError = error.localizedDescription }
         }
         do {
-            if Date().timeIntervalSince(lastHeartbeat) > 65 { try restoreAll(); throw PowerFailure("Controls stopped because MenuSprite disconnected") }
+            if ProcessInfo.processInfo.systemUptime - lastHeartbeat > 65 { try restoreAll(); throw PowerFailure(Self.disconnected) }
             let state = hardware.snapshot()
             if ProcessInfo.processInfo.thermalState == .critical { try restoreAll(); throw PowerFailure("Controls stopped at critical thermal state") }
             if recovery.lidOwned && (state.pluggedIn != true || (state.percent ?? 0) <= 20 || Date() >= (deadline ?? .distantPast)) { try restoreLid() }
@@ -252,7 +258,9 @@ private func sleepDisabled() -> Bool? {
         do {
             guard !recoveryUnavailable || request.action == .status else { throw PowerFailure("Controls blocked by unreadable recovery journal") }
             // Any request is proof the app is alive; the LED setting rides along on every one.
-            lastHeartbeat = Date()
+            // It also re-sends the LED and fans, so a disconnect notice no longer describes the state.
+            lastHeartbeat = ProcessInfo.processInfo.systemUptime
+            if lastError == Self.disconnected { lastError = nil }
             if let led = request.led, led != ledControl || led { setLED(led) }
             // A fan failure must not cancel the command it rode in on; it hands the fans back instead.
             if let fans = request.fans, fans != fanTarget || request.action == .fans {
@@ -264,7 +272,7 @@ private func sleepDisabled() -> Bool? {
             }
             switch request.action {
             case .status, .fans: break
-            case .heartbeat: lastHeartbeat = Date()
+            case .heartbeat: break
             case .stopAll: try restoreAll()
             case .stopBattery: try restoreBattery()
             case .stopLid: try restoreLid()
@@ -293,7 +301,7 @@ private func sleepDisabled() -> Bool? {
                 } else {
                     guard s.chargeSupported else { throw PowerFailure("This firmware publishes no writable charge control, so a charge limit cannot be held") }
                 }
-                band = request.band; mode = request.mode; lastError = nil; lastHeartbeat = Date(); tick()
+                band = request.band; mode = request.mode; lastError = nil; tick()
             case .startLid:
                 guard recovery.original.isEmpty || mode != .off else { throw PowerFailure("Battery recovery must finish first") }
                 guard request.duration.isFinite, (60...86400).contains(request.duration) else { throw PowerFailure("Choose a closed-lid session of 1 minute to 24 hours") }
@@ -303,7 +311,7 @@ private func sleepDisabled() -> Bool? {
                 recovery.lidOwned = true; try save()
                 _ = try execute("/usr/bin/pmset",["disablesleep","1"])
                 guard sleepDisabled() == true else { throw PowerFailure("macOS did not confirm disabled sleep") }
-                deadline = Date().addingTimeInterval(request.duration); lastHeartbeat = Date(); lastError = nil
+                deadline = Date().addingTimeInterval(request.duration); lastError = nil
             }
         } catch { lastError = error.localizedDescription }
         schedule(); return snapshot()

@@ -76,6 +76,8 @@ final class SystemAudioController: ObservableObject {
     private var writes = IslandOutputWriteQueue()
     private var waiters: [Int: (OutputWriteResult) -> Void] = [:]
     private var nextWaiter = 1
+    /// A volume tone waiting for the queued writes to land; true when Shift flips the setting.
+    private var pendingTone: Bool?
     private var readTask: Task<Void, Never>?
     private var pendingInputVolume: Double?
     private var writingInput = false
@@ -90,6 +92,7 @@ final class SystemAudioController: ObservableObject {
         audio.demandChanged = { [weak self] _ in self?.sync() }
         audio.setVolume = { [weak self] level in self?.setVolume(level, own: true) }
         audio.setMuted = { [weak self] muted in self?.request(volume: nil, muted: muted, own: true) }
+        audio.volumeEditEnded = { [weak self] in self?.soundTone() }
         audio.selectOutput = { [weak self] device in self?.select(device, input: false) }
         audio.selectInput = { [weak self] device in self?.select(device, input: true) }
         audio.setInputVolume = { [weak self] level in self?.setInputVolume(level) }
@@ -134,6 +137,7 @@ final class SystemAudioController: ObservableObject {
         listenedOutput = nil
         listenedInput = nil
         feedback.stop()
+        pendingTone = nil
         settle(writes.abandon(), .discarded)
         writingInput = false
         pendingInputVolume = nil
@@ -233,6 +237,7 @@ final class SystemAudioController: ObservableObject {
         isStalled = true
         readTask?.cancel()
         readTask = nil
+        pendingTone = nil
         settle(writes.abandon(), .discarded)
         writingInput = false
         pendingInputVolume = nil
@@ -276,6 +281,19 @@ final class SystemAudioController: ObservableObject {
         if let start = submission.start { perform(start) }
     }
 
+    /// Sounds macOS's volume tone (when its setting asks for it) once the queued writes have landed, so
+    /// it plays at the new level. A volume key asks after each step, a slider when it is let go.
+    func soundTone(shiftHeld: Bool = false) {
+        guard observing, !isStalled, listenedOutput != nil else { return }
+        if writes.inFlight == nil { playTone(shiftHeld: shiftHeld) } else { pendingTone = shiftHeld }
+    }
+
+    private func playTone(shiftHeld: Bool) {
+        guard IslandVolumeTone.shouldPlay(enabled: VolumeToneSound.isEnabled, shiftHeld: shiftHeld,
+                                          level: audio.volume, muted: audio.isMuted) else { return }
+        VolumeToneSound.play()
+    }
+
     /// A handled key always raises the notice, even when the level did not change.
     func keyFeedback() -> Bool { feedback.keyPressed(level: audio.volume, muted: audio.isMuted) }
 
@@ -294,7 +312,12 @@ final class SystemAudioController: ObservableObject {
         settle(write.waiters, result)
         let next = writes.finish(currentLifetime: lifetime)
         settle(next.discarded, .discarded)
-        if let start = next.start { perform(start) } else if observing { scheduleRead(after: 0) }
+        if let start = next.start { perform(start); return }
+        if let shiftHeld = pendingTone {
+            pendingTone = nil
+            if result == .written { playTone(shiftHeld: shiftHeld) }
+        }
+        if observing { scheduleRead(after: 0) }
     }
 
     private func settle(_ ids: [Int], _ result: OutputWriteResult) {

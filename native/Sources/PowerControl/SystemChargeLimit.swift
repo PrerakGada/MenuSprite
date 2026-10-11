@@ -93,13 +93,18 @@ public enum MagSafeLED: UInt8, Codable, Sendable {
 /// than `band` below it. macOS's own limit is exact — it recharges the moment the level dips a
 /// fraction under it, under load or after unplugged use — so inside the band MenuSprite sets
 /// macOS's limit to the current level, which holds the pack where it is: no charge, no drain.
+///
+/// Above the limit the pack is held where it is too. macOS drains to any limit below the level,
+/// and a limit is not a request to discharge (Prerak, 10 Oct 2026: the adapter should always be
+/// preferred over the battery); only `drain` — the Discharge button — lets macOS run it down.
 public enum Sailing {
     public static let choices = [0, 3, 5, 10]
 
     /// The limit macOS should hold now, and whether a recharge back up to the limit is under way.
     /// `recharging` carries over between calls: a recharge that started below the band runs all
     /// the way to the limit instead of stopping as soon as it re-enters the band.
-    public static func target(limit: Int, band: Int, percent: Int?, recharging: Bool) -> (limit: Int, recharging: Bool) {
+    public static func target(limit: Int, band: Int, percent: Int?, recharging: Bool, drain: Bool = false) -> (limit: Int, recharging: Bool) {
+        if let percent, percent > limit, !drain { return (min(100, percent), false) }
         guard band > 0, let percent, percent < limit else { return (limit, false) }
         if percent < limit - band || recharging { return (limit, true) }
         return (max(1, percent), false)

@@ -53,14 +53,21 @@ public struct IslandVolumeKeyGate: Sendable {
 
 public enum IslandVolumeStep {
     public static let coarse = 1.0 / 16
-    public static let fine = 1.0 / 64
 
-    /// One key step. Stepping from muted starts at 0; the result stays within 0…1; raising the level
-    /// above 0 also unmutes.
+    /// One key step. A coarse step is a sixteenth, as macOS's keys move; a fine step (Option + Shift)
+    /// moves to the next whole percent, so 47.3% goes to 48% or 47%. Stepping from muted starts at 0;
+    /// the result stays within 0…1; raising the level above 0 also unmutes.
     public static func apply(current: Double, muted: Bool, up: Bool, fine: Bool) -> (volume: Double, unmute: Bool) {
         let start = muted || !current.isFinite ? 0 : current
-        let step = fine ? Self.fine : coarse
-        let volume = min(1, max(0, start + (up ? step : -step)))
+        let next: Double
+        if fine {
+            // CoreAudio stores levels as Float32: the tolerance keeps 0.4699999 counting as 47%.
+            let percent = start * 100
+            next = (up ? (percent + 1e-3).rounded(.down) + 1 : (percent - 1e-3).rounded(.up) - 1) / 100
+        } else {
+            next = start + (up ? coarse : -coarse)
+        }
+        let volume = min(1, max(0, next))
         return (volume, muted && volume > 0)
     }
 }
@@ -101,5 +108,16 @@ public enum IslandAudioNaming {
         let byName = a.name.localizedCaseInsensitiveCompare(b.name)
         if byName != .orderedSame { return byName == .orderedAscending }
         return a.uid < b.uid
+    }
+}
+
+/// macOS's "Play feedback when volume is changed" tone for changes the island makes itself. macOS
+/// plays it only for volume keys it handles, and the island consumes them.
+public enum IslandVolumeTone {
+    /// Shift held alone with a volume key flips the setting, as macOS's own keys do (Option + Shift is the
+    /// 1% step and keeps the setting). A muted or silent output stays silent.
+    public static func shouldPlay(enabled: Bool, shiftHeld: Bool, level: Double?, muted: Bool) -> Bool {
+        guard enabled != shiftHeld, !muted, let level, level.isFinite else { return false }
+        return level > 0
     }
 }

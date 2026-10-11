@@ -101,8 +101,10 @@ struct SpriteGallery: View {
                             Text(missing == 0 ? "All in your menu bar" : "\(set.templateIDs.count - missing) of \(set.templateIDs.count) in your menu bar")
                                 .font(.caption).foregroundStyle(.secondary)
                             Spacer()
-                            Button(missing == set.templateIDs.count ? "Add all \(missing)" : "Add the \(missing) missing") { store.add(set) }
-                                .disabled(missing == 0).accessibilityIdentifier("add-set-\(set.id)")
+                            if missing > 0 {
+                                Button(missing == set.templateIDs.count ? "Add all \(missing)" : "Add the \(missing) missing") { store.add(set) }
+                                    .accessibilityIdentifier("add-set-\(set.id)")
+                            }
                         }.controlSize(.small)
                     }
                     .padding(12)

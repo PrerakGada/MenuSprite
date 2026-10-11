@@ -59,11 +59,6 @@ struct HubView: View {
         }
         .overlay(alignment: .trailing) {
             HStack(spacing: 6) {
-                if monitoring.isSampling {
-                    Image(systemName: "waveform.path")
-                        .font(.system(size: 12)).foregroundStyle(.tertiary)
-                        .help("Shared sampling is active for this tab")
-                }
                 Button { model.refresh() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.borderless).help("Refresh").accessibilityLabel("Refresh")
                     .accessibilityIdentifier("hub-refresh")
@@ -114,9 +109,12 @@ private struct HubTabRail: View {
             ForEach(HubTab.available) { tab in
                 let selected = model.tab == tab
                 Button { model.select(tab) } label: {
-                    Image(systemName: tab.symbol)
-                        .font(.system(size: 15, weight: .medium))
-                        .frame(maxWidth: .infinity, minHeight: 30)
+                    // A word under each icon: nine bare glyphs left people guessing (1 Oct).
+                    VStack(spacing: 2) {
+                        Image(systemName: tab.symbol).font(.system(size: 14, weight: .medium)).frame(height: 18)
+                        Text(tab.title).font(.system(size: 9.5, weight: selected ? .semibold : .regular)).lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                        .frame(maxWidth: .infinity, minHeight: 40)
                         .foregroundStyle(selected ? Color.white : Color.secondary)
                         .background(selected ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                         .contentShape(RoundedRectangle(cornerRadius: 8))

@@ -51,8 +51,9 @@ final class PowerStore: ObservableObject {
     @Published private(set) var batteryAmperage: Int?
     /// Charge to 100% once; the saved limit returns when the cable is unplugged.
     @Published private(set) var topUpActive = false
-    /// Discharge stopped part-way: hold at this level instead of draining to the limit.
-    @Published private(set) var holdLevel: Int?
+    /// Discharge was pressed: macOS may run the pack down to the limit. Without it a level above
+    /// the limit is held where it is, the adapter powering the Mac. Ends at the limit, on unplug or Stop.
+    @Published private(set) var dischargeActive = false
     @Published private(set) var ledControl = false
     /// The fan speed MenuSprite should hold, saved; `.automatic` leaves the fans to macOS.
     /// Re-sent on every helper request, so it returns after a sleep, a relaunch or a helper restart.
@@ -62,6 +63,11 @@ final class PowerStore: ObservableObject {
     /// Sailing band in percent (0 = an exact limit): no top-up until the level falls this far below the limit.
     @Published private(set) var sailingBand = 5
     private var sailRecharging = false
+    /// The level held above the limit. It only moves down while plugged in: macOS tops a held level up
+    /// to the next whole percent, and following the reading up would ratchet the hold to full.
+    private var aboveLimitHold: Int?
+    /// The pack's own state of charge (`BatteryHardware.stateOfCharge`), read with the limit state.
+    private var chargeLevel: Int?
     private var lastLimitWrite: (value: Int, at: Date)?
     private var limitCheck: DispatchWorkItem?
     /// A limit change that arrived while the helper was still busy with the previous one.
@@ -164,7 +170,9 @@ final class PowerStore: ObservableObject {
         if let data = preferences.data(forKey:"power.chargeBand"), let saved = try? JSONDecoder().decode(ChargeBand.self,from:data), saved.valid { band = saved }
         saverEnabled = preferences.bool(forKey:"power.saverEnabled")
         topUpActive = preferences.bool(forKey:"power.topUp")
-        holdLevel = preferences.object(forKey:"power.holdLevel") as? Int
+        dischargeActive = preferences.bool(forKey:"power.discharge")
+        // Before 10 Oct a limit below the level drained by default and this paused it; holding is now the default.
+        preferences.removeObject(forKey:"power.holdLevel")
         ledControl = preferences.bool(forKey:"power.magsafeLED")
         if let percent = preferences.object(forKey:"power.fanPercent") as? Int,
            FanPolicy.valid(.percent(percent)) { fanTarget = .percent(percent) }
@@ -442,11 +450,11 @@ final class PowerStore: ObservableObject {
     /// True while MenuSprite itself is holding the adapter off.
     var runningOnBatteryByChoice: Bool { snapshot.mode == .discharge && snapshot.adapterEnabled == false }
     func setSaver(_ on: Bool) {
-        saverEnabled = on
+        saverEnabled = on; aboveLimitHold = nil
         preferences.set(on, forKey: "power.saverEnabled")
         lastSaverAttempt = nil
         if usesSystemLimit {
-            if !on { setTopUp(false); setHold(nil); writeSystemLimit(100) } else { reconcileLimit(force: true) }
+            if !on { setTopUp(false); setDischarge(false); writeSystemLimit(100) } else { reconcileLimit(force: true) }
             return
         }
         if on { battery(.maintain) } else { stopBattery() }
@@ -462,8 +470,8 @@ final class PowerStore: ObservableObject {
         settingsChanged()
         lastSaverAttempt = nil
         if usesSystemLimit {
-            // Choosing a limit is the intent to hold it; a paused discharge no longer applies.
-            setHold(nil); setTopUp(false)
+            // Choosing a limit ends a top up; a discharge already running carries on to the new limit.
+            setTopUp(false)
             if !saverEnabled { saverEnabled = true; preferences.set(true, forKey: "power.saverEnabled") }
             reconcileLimit(force: true); return
         }
@@ -514,6 +522,14 @@ final class PowerStore: ObservableObject {
         if busy { fanWriteWaiting = true; return }
         send(.init(.fans))
     }
+    /// Off-screen renders only: show the page as it looks with the helper in `state`, reading the battery
+    /// but sending nothing.
+    func previewHelper(_ state: PowerHelperState) {
+        guard Self.offline else { return }
+        helperState = state; helperCheckedAt = Date()
+        refresh()
+        if helperInstalled { snapshot.helperConnected = true; helperStatus = "Connected" }
+    }
     /// Off-screen renders only: show a fan state without sending anything.
     func previewFans(_ target: FanTarget, held: Bool) {
         guard Self.offline else { return }
@@ -544,11 +560,26 @@ final class PowerStore: ObservableObject {
     // MARK: macOS charge limit
 
     /// The level macOS should hold right now.
-    /// Without the helper macOS takes only its own 80–100% steps, so sailing and holds (which pick
-    /// arbitrary levels) apply only with it; otherwise the target is exactly the chosen limit.
-    var desiredSystemLimit: Int { topUpActive ? 100 : (helperInstalled ? (holdLevel ?? sailTarget.limit) : band.upper) }
+    /// Without the helper macOS takes only its own 80–100% steps, so sailing (which picks arbitrary
+    /// levels) applies only with it, and a hold above the limit is the step at or above the level.
+    var desiredSystemLimit: Int {
+        if topUpActive { return 100 }
+        if helperInstalled { return sailTarget.limit }
+        guard isHoldingAboveLimit, let percent = heldPercent else { return band.upper }
+        return min(100, (percent + 4) / 5 * 5)
+    }
     private var sailTarget: (limit: Int, recharging: Bool) {
-        Sailing.target(limit: band.upper, band: sailingBand, percent: snapshot.percent, recharging: sailRecharging)
+        Sailing.target(limit: band.upper, band: sailingBand, percent: heldPercent, recharging: sailRecharging, drain: dischargeActive)
+    }
+    /// The pack's level as powerd measures it, which the shown percentage runs ahead of.
+    private var policyPercent: Int? { chargeLevel ?? snapshot.percent }
+    private var heldPercent: Int? {
+        guard let percent = policyPercent else { return nil }
+        return aboveLimitHold.map { min($0, percent) } ?? percent
+    }
+    /// Plugged in above the limit with no discharge asked for: the cable runs the Mac and the pack stays put.
+    var isHoldingAboveLimit: Bool {
+        saverEnabled && !topUpActive && !dischargeActive && snapshot.pluggedIn == true && (policyPercent ?? 0) > band.upper
     }
     /// macOS has MenuSprite's value but powerd still charges under the previous one; it switches
     /// at the next whole percent (about two minutes at this Mac's charge rate).
@@ -558,11 +589,12 @@ final class PowerStore: ObservableObject {
     }
     /// Inside the band: macOS is told to hold the current level rather than top up.
     var isSailing: Bool {
-        saverEnabled && !topUpActive && holdLevel == nil && snapshot.pluggedIn == true && sailTarget.limit < band.upper
+        saverEnabled && !topUpActive && snapshot.pluggedIn == true && sailTarget.limit < band.upper
     }
     /// macOS is running the Mac from its battery to reach the limit, cable connected.
     var isDraining: Bool {
-        guard snapshot.pluggedIn == true, let percent = snapshot.percent else { return false }
+        // powerd compares its limit with the pack's own level, not the shown one.
+        guard snapshot.pluggedIn == true, let percent = policyPercent else { return false }
         // powerd re-registers its policy after a change and briefly records none; fall back to
         // the limit PowerUI reports and the measured current rather than calling that "holding".
         // Its record also lags PowerUI by several seconds after a change, so a record that
@@ -583,13 +615,14 @@ final class PowerStore: ObservableObject {
         }
         guard snapshot.pluggedIn == true, let percent = snapshot.percent else { return "Limit \(band.upper)% · held by macOS when plugged in" }
         if topUpActive { return percent >= 100 ? "Topped up · \(band.upper)% returns when unplugged" : "Topping up to 100%" }
-        if let holdLevel { return "Discharge paused · holding \(holdLevel)%" }
+        if isHoldingAboveLimit { return "Holding \(percent)% · above your \(band.upper)% limit, Discharge runs it down" }
         // Above the target macOS drains to it; powerd's record can lag a change by seconds, so the
         // level alone decides the words rather than a stale record.
-        if isDraining || percent > target { return "Discharging to \(target)% · cable connected" }
+        let level = policyPercent ?? percent
+        if isDraining || level > target { return "Discharging to \(target)% · cable connected" }
         if isSailing { return "Sailing · holding \(percent)%, charges below \(band.upper - sailingBand)%" }
         if (snapshot.chargeCurrent ?? 0) > 0 { return "Charging to \(target)%" }
-        return percent < target ? "Plugged in · below \(target)%" : "Holding \(target)%"
+        return level < target ? "Plugged in · below \(target)%" : "Holding \(percent)%"
     }
     /// Where the bar's marker and the menu-bar tick belong: the limit macOS is enforcing.
     var activeCeiling: Int? {
@@ -598,14 +631,13 @@ final class PowerStore: ObservableObject {
         guard saverEnabled, !topUpActive, band.upper < 100 else { return nil }
         return band.upper
     }
-    func toggleTopUp() { setTopUp(!topUpActive); if topUpActive { setHold(nil) }; reconcileLimit(force: true) }
-    /// Discharge drains to the limit; pressing it while draining stops and holds the level reached.
+    func toggleTopUp() { setTopUp(!topUpActive); if topUpActive { setDischarge(false) }; reconcileLimit(force: true) }
+    /// Discharge drains to the limit; pressing it again stops and holds the level reached.
     func toggleDischarge() {
         guard usesSystemLimit else { battery(snapshot.mode == .discharge ? .maintain : .discharge); return }
         setTopUp(false)
-        if holdLevel != nil { setHold(nil) }
-        else if saverEnabled, isDraining, let percent = snapshot.percent { setHold(percent) }
-        else if !saverEnabled { saverEnabled = true; preferences.set(true, forKey: "power.saverEnabled") }
+        setDischarge(!dischargeActive)
+        if dischargeActive && !saverEnabled { saverEnabled = true; preferences.set(true, forKey: "power.saverEnabled") }
         reconcileLimit(force: true)
     }
     var canDischargeToLimit: Bool {
@@ -620,26 +652,26 @@ final class PowerStore: ObservableObject {
         send(.init(.status))
         if !on { disconnectIfIdle() }
     }
-    private func setTopUp(_ on: Bool) { topUpActive = on; preferences.set(on, forKey: "power.topUp") }
-    private func setHold(_ level: Int?) {
-        holdLevel = level
-        if let level { preferences.set(level, forKey: "power.holdLevel") } else { preferences.removeObject(forKey: "power.holdLevel") }
-    }
+    private func setTopUp(_ on: Bool) { topUpActive = on; aboveLimitHold = nil; preferences.set(on, forKey: "power.topUp") }
+    private func setDischarge(_ on: Bool) { dischargeActive = on; aboveLimitHold = nil; preferences.set(on, forKey: "power.discharge") }
     private func readLimitState() {
         let limit = MSPowerUI.currentLimit()
         systemLimit = limit > 0 ? limit : nil
         enforced = EnforcedChargeLimit.current()
         batteryAmperage = BatteryHardware().batteryFlow()?.amperage
+        chargeLevel = BatteryHardware.stateOfCharge()
     }
     /// Keeps macOS's limit on MenuSprite's target. Runs on launch, wake, plug and every power
     /// event; it only writes when the two differ, and never when MenuSprite's limit is off, so
     /// a limit chosen in System Settings is left alone until the user turns MenuSprite's on.
     func reconcileLimit(force: Bool = false) {
         guard usesSystemLimit else { return }
-        if snapshot.pluggedIn == false && (topUpActive || holdLevel != nil) { setTopUp(false); setHold(nil) }
-        if let hold = holdLevel, let percent = snapshot.percent, percent <= band.upper || hold <= band.upper { setHold(nil) }
-        guard saverEnabled, batteryConflict == nil else { return }
+        if snapshot.pluggedIn == false && (topUpActive || dischargeActive) { setTopUp(false); setDischarge(false) }
+        // A discharge ends at the limit; from there sailing takes over.
+        if dischargeActive, let percent = policyPercent, percent <= band.upper { setDischarge(false) }
+        guard saverEnabled, batteryConflict == nil else { aboveLimitHold = nil; return }
         readLimitState()
+        aboveLimitHold = isHoldingAboveLimit ? heldPercent : nil
         let sail = sailTarget
         if sail.recharging != sailRecharging { sailRecharging = sail.recharging; preferences.set(sail.recharging, forKey:"power.sailRecharging") }
         // macOS does not charge on battery, so there is nothing to hold; the plug-in event writes.

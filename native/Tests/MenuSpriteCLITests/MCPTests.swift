@@ -41,7 +41,7 @@ private func call(_ id: Int, _ tool: String, _ arguments: JSONValue) -> JSONValu
     let tools = try #require(answer["result"]?["tools"]?.items)
     #expect(tools.compactMap { $0["name"]?.string } == ["get_guide", "list_examples", "get_example", "list_readings", "list_sprites", "get_sprite",
                                                         "validate_sprite", "apply_sprite", "preview_sprite", "test_command", "refresh_sprite",
-                                                        "set_sprite", "remove_sprite", "open_board"])
+                                                        "set_sprite", "remove_sprite", "report_barrier", "list_barriers", "open_board"])
     for tool in tools {
         #expect(tool["inputSchema"]?["type"]?.string == "object", "\(tool["name"]?.string ?? "")")
         #expect(tool["inputSchema"]?["properties"]?.members != nil)
@@ -388,4 +388,17 @@ private func call(_ id: Int, _ tool: String, _ arguments: JSONValue) -> JSONValu
     let messages = try collected.out.split(separator: "\n").map { try JSONValue.parse(String($0)) }
     #expect(messages.count == 16)
     #expect(messages.allSatisfy { $0["result"]?["contents"]?[0]?["text"]?.string == AgentGuide.markdown })
+}
+
+@Test func previewFoldersOlderThanADayAreClearedWhenANewOneIsMade() throws {
+    let temporary = URL(fileURLWithPath: try scratchFolder(), isDirectory: true)
+    let old = temporary.appendingPathComponent("menusprite-preview-old"), recent = temporary.appendingPathComponent("menusprite-preview-new")
+    let other = temporary.appendingPathComponent("someone-else")
+    for url in [old, recent, other] { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 86400)], ofItemAtPath: old.path)
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 86400)], ofItemAtPath: other.path)
+    let fresh = MCPTools.freshDirectory(in: temporary)
+    #expect(fresh.hasPrefix(temporary.path + "/menusprite-preview-"))
+    #expect(!FileManager.default.fileExists(atPath: old.path))
+    #expect(FileManager.default.fileExists(atPath: recent.path) && FileManager.default.fileExists(atPath: other.path))
 }

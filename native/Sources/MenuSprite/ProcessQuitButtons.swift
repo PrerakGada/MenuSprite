@@ -8,6 +8,9 @@ import SystemMonitoring
 enum PanelInteraction {
     private static var depth = 0
     static var isSuspended: Bool { depth > 0 }
+    /// What the boards' outside-click and app-switch dismissal asks: a dialog of their own, or a
+    /// screenshot being taken of them.
+    static var holdsBoards: Bool { isSuspended || ScreenshotInProgress.isInProgress }
     @discardableResult
     static func suspended<T>(_ body: () -> T) -> T {
         depth += 1; defer { depth -= 1 }

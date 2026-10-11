@@ -10,7 +10,7 @@ public enum AgentProtocolVersion {
 }
 
 public enum AgentOp: String, Codable, Sendable, CaseIterable {
-    case hello, readings, list, get, validate, apply, remove, set, run, render, open, refresh
+    case hello, readings, list, get, validate, apply, remove, set, run, render, open, refresh, barrier, barriers
 }
 
 public struct AgentRequest: Codable, Sendable {
@@ -342,6 +342,71 @@ public struct BlockReport: Codable, Sendable, Equatable {
 public struct RefreshResult: Codable, Sendable {
     public var values: [ValueState]
     public init(values: [ValueState]) { self.values = values }
+}
+
+// MARK: - Barriers
+
+/// `barrier`: something a person asked for that MenuSprite cannot express without a change to its code. Agents
+/// report one instead of editing MenuSprite or faking it, so the list of what still needs code is known and can be
+/// worked down until everything is customisable. Spec: `docs/agent-authoring.md` ("Barriers").
+public struct BarrierReport: Codable, Sendable, Equatable {
+    /// What the person asked for, in their terms ("a text box where I type a todo and press return").
+    public var asked: String
+    /// What MenuSprite could not do ("boards have no text input").
+    public var missing: String
+    /// What was built instead, if anything, and how it differs from the ask.
+    public var workaround: String?
+    /// A general capability that would remove this barrier for everyone ("an input block that runs a command with
+    /// the typed text as $INPUT").
+    public var suggestion: String?
+    /// face, board, values, rules, actions, data, tools or other.
+    public var area: String?
+    /// The sprite it was for, by name.
+    public var sprite: String?
+    /// Who reported it (claude-code, codex, copilot…); the CLI and MCP server fill it in.
+    public var agent: String?
+    public init(asked: String, missing: String, workaround: String? = nil, suggestion: String? = nil, area: String? = nil,
+                sprite: String? = nil, agent: String? = nil) {
+        self.asked = asked; self.missing = missing; self.workaround = workaround; self.suggestion = suggestion
+        self.area = area; self.sprite = sprite; self.agent = agent
+    }
+    public static let areas = ["face", "board", "values", "rules", "actions", "data", "tools", "other"]
+}
+
+/// A reported barrier as kept: the report, when, and how it was resolved once a code change removed it.
+public struct Barrier: Codable, Sendable, Equatable {
+    public var id: String
+    /// ISO 8601.
+    public var reported: String
+    public var report: BarrierReport
+    /// How many times the same missing thing has been reported (the same `missing`, ignoring case and spacing).
+    public var count: Int
+    public var resolved: String?
+    /// What changed to resolve it ("0.6.0 adds input blocks").
+    public var resolution: String?
+    public init(id: String, reported: String, report: BarrierReport, count: Int = 1, resolved: String? = nil, resolution: String? = nil) {
+        self.id = id; self.reported = reported; self.report = report; self.count = count; self.resolved = resolved; self.resolution = resolution
+    }
+}
+
+/// `barriers`: the list (open ones unless `all`), or, with `resolve` (an id or a prefix of one) and `resolution`,
+/// closing one.
+public struct BarriersArgs: Codable, Sendable {
+    public var all: Bool?
+    public var resolve: String?
+    public var resolution: String?
+    public init(all: Bool? = nil, resolve: String? = nil, resolution: String? = nil) { self.all = all; self.resolve = resolve; self.resolution = resolution }
+}
+
+public struct BarriersResult: Codable, Sendable {
+    public var barriers: [Barrier]
+    public var open: Int
+    public var resolved: Int
+    /// The log file, for a person who wants to read or back it up.
+    public var path: String
+    public init(barriers: [Barrier], open: Int, resolved: Int, path: String) {
+        self.barriers = barriers; self.open = open; self.resolved = resolved; self.path = path
+    }
 }
 
 public struct OpenResult: Codable, Sendable {

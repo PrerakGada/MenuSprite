@@ -22,15 +22,20 @@ public enum AgentGuide {
     | Read saved sprites | `list_sprites`, `get_sprite` | `menusprite list`, `menusprite get <name>` |
     | Run a sprite's commands now | `refresh_sprite` | `menusprite refresh <name>` |
     | Show the user; delete (ask first) | `open_board`; `remove_sprite` | `menusprite open <name>`; `menusprite remove <name>` |
+    | Something MenuSprite cannot do | `report_barrier`, `list_barriers` | `menusprite barrier "<missing>" --asked "<wanted>"`, `menusprite barriers` |
 
     ## The loop
 
     1. **Start from the closest example** (list at the end), and look up reading ids.
-    2. **Test every command and script** before using it. It really runs: test only read-only ones, never the on/off/stop actions (and `gh api -f` sends a POST). `files` / `--files` runs a draft's scripts in a temporary folder.
+    2. **Test every command and script** before using it. It really runs: test only read-only ones, never the on/off/stop actions (and `gh api -f` sends a POST). Saving the sprite and recording a barrier are the job itself, not side effects: "only run read-only commands" means the commands you test. `files` / `--files` runs a draft's scripts in a temporary folder.
     3. **Apply.** It validates first and saves nothing on errors; every problem comes back at once as `path: message — hint`. A spec replaces the sprite with the same `id`, else the same name (any case). `dry_run` / `--dry-run` saves nothing.
     4. **Look at every picture**: face and board, dark and light, drawn after running each command once. The text says what each value showed (or why not) and what each script block drew and does when clicked; a failed block comes with its path and the end of its stderr.
     5. **Draw every state** with stand-in `values` / `--value id=v`, which draw a rule's other branches without making them happen: `{"review": 0}`, `{"review": 12}`, `{"state": "Stopped"}`, `{"session.pace": "over"}`, and `null` for a failed command or signed-out reading (the `is missing` look).
     6. **Edit** a saved sprite from `get_sprite` / `menusprite get` (keep its `id`). Tell the user what each command runs and how often; `open_board` only if they want the board shown (not when they said no windows).
+
+    ## When MenuSprite cannot do it
+
+    A request no spec can express (a block, property, reading, action or behaviour MenuSprite lacks) is a **barrier**. Never edit MenuSprite's code, `monitoring.json` or its `Sprites` folder, and never hide the gap behind a fragile hack. Check this guide and the examples first. Then tell the user plainly: "MenuSprite can't do X yet; that needs a change to MenuSprite itself". Build the closest honest version if it is worth having, say how it differs, and record the barrier: `report_barrier` / `menusprite barrier "<what is missing>" --asked "<what they wanted>"` with the workaround, a suggested general capability and the area (face, board, values, rules, actions, data, tools). Name the gap generally ("boards have no text input", not "can't add todos"); `list_barriers` / `menusprite barriers` shows what is recorded, so reuse its wording for the same gap. These records decide what MenuSprite builds next.
 
     ## The spec
 

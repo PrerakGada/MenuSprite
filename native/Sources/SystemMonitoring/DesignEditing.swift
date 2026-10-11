@@ -144,12 +144,10 @@ extension SpriteDesign {
         let base = node.name.isEmpty ? node.kind.title : node.name
         switch node.kind {
         case .text:
-            let text = node.segments.map { segment -> String in
-                switch segment {
-                case .literal(let literal): literal
-                case .value(let id): "{\(variable(id)?.name ?? id)}"
-                }
-            }.joined()
+            // Plain words: a value is named, never written in braces.
+            let names = node.segments.compactMap { $0.variableID.map { variable($0)?.name ?? $0 } }
+            if !names.isEmpty { return "\(base) · \(names.joined(separator: ", ").prefix(28))" }
+            let text = node.segments.map { if case .literal(let literal) = $0 { literal } else { "" } }.joined()
             return "\(base) “\(text.prefix(24))”"
         case .icon: return "\(base) · \(node.symbol)"
         case .bar, .battery: return "\(base) · \(node.variable.flatMap(variable)?.name ?? "no value")"

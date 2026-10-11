@@ -137,14 +137,31 @@ public final class BatteryHardware: PowerHardware {
         guard let key = adapterKey else { return [:] }
         return [key: [allow ? 0 : (key == "CHIE" ? 8 : 1)]]
     }
+    /// The pack's own state of charge, which powerd compares a charge limit against. The percentage
+    /// macOS shows (`BUIC`) runs ahead of it near full — 91% shown at 89% on 10 Oct 2026 — so a limit
+    /// set to the shown level still charges. Registry-only, readable without root.
+    public static func stateOfCharge() -> Int? {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+        let data = IORegistryEntryCreateCFProperty(service, "BatteryData" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? [String: Any]
+        guard let soc = (data?["StateOfCharge"] as? NSNumber)?.intValue, (1...100).contains(soc) else { return nil }
+        return soc
+    }
     public func batteryFlow() -> (charging: Bool, amperage: Int)? {
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
         guard service != 0 else { return nil }
         defer { IOObjectRelease(service) }
         func property(_ name: String) -> Any? { IORegistryEntryCreateCFProperty(service, name as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() }
+        let charging = (property("IsCharging") as? Bool) ?? false
+        // The registry republishes its current about once a minute; the SMC's B0AC (mA,
+        // little-endian on Apple silicon) is live, so a switch shows in seconds, not a minute.
+        if let live = read("B0AC"), live.count == 2 {
+            return (charging, Int(Int16(bitPattern: UInt16(live[0]) | UInt16(live[1]) << 8)))
+        }
         guard let raw = property("InstantAmperage") as? NSNumber else { return nil }
         // The registry stores the signed current as an unsigned 64-bit value.
-        return ((property("IsCharging") as? Bool) ?? false, Int(truncatingIfNeeded: raw.int64Value))
+        return (charging, Int(truncatingIfNeeded: raw.int64Value))
     }
     public func readLED() -> MagSafeLED? { read("ACLC").flatMap { $0.count == 1 ? MagSafeLED(rawValue: $0[0]) : nil } }
     /// Only the connector LED key, only the known values; no other key can be reached here.

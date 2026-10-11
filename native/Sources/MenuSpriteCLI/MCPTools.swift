@@ -73,6 +73,13 @@ struct MCPTools: Sendable {
         Tool(name: "remove_sprite", title: "Delete a sprite",
              description: "Delete a sprite; its folder of files goes to the Trash. Ask the user first.",
              schema: #"{"type":"object","properties":{\#(spriteProperty)},"required":["sprite"]}"#, readOnly: false, destructive: true),
+        Tool(name: "report_barrier", title: "Record something MenuSprite cannot do yet",
+             description: "Record a barrier: something the user asked for that a sprite spec cannot express, so it would need a change to MenuSprite's code (a missing block, property, reading, action or tool behaviour). Check the guide and examples first so it is a real gap, not a misreading. Tell the user what is missing too. The list is how MenuSprite's maker decides what to build next, so say it in general terms.",
+             schema: #"{"type":"object","properties":{"asked":{"type":"string","description":"What the user asked for, in their terms."},"missing":{"type":"string","description":"What MenuSprite could not do, in one sentence (\"boards have no text input\")."},"workaround":{"type":"string","description":"What you built instead, if anything, and how it differs from the ask."},"suggestion":{"type":"string","description":"A general capability that would remove this barrier for everyone."},"area":{"type":"string","enum":["face","board","values","rules","actions","data","tools","other"]},"sprite":{"type":"string","description":"The sprite it was for, by name."}},"required":["asked","missing"]}"#,
+             readOnly: false),
+        Tool(name: "list_barriers", title: "List what MenuSprite cannot do yet",
+             description: "The barriers recorded so far (open ones unless all is true): what was asked, what was missing, the workaround and the suggested capability. Read it before reporting, to add to an existing one rather than duplicating it in other words.",
+             schema: #"{"type":"object","properties":{"all":{"type":"boolean","description":"Include barriers already resolved by a code change."}}}"#, readOnly: true),
         Tool(name: "open_board", title: "Open a sprite's board on screen",
              description: "Pop the sprite's board open on the user's screen, as if they clicked it. Use it to show the user the finished result.",
              schema: #"{"type":"object","properties":{\#(spriteProperty)},"required":["sprite"]}"#, readOnly: false, idempotent: true),
@@ -127,11 +134,21 @@ struct MCPTools: Sendable {
         (try? JSONValue.parse(example.json).serialized(pretty: true)) ?? example.json
     }
 
-    /// A new folder for one render's PNGs. They are left for the system to clean from the temporary folder, so
-    /// the paths in a result stay valid while the agent works.
-    static func freshDirectory(in temporary: URL) -> String {
-        temporary.appendingPathComponent("menusprite-preview-\(UUID().uuidString.prefix(8).lowercased())", isDirectory: true).path
+    /// A new folder for one render's PNGs. Recent ones stay, so the paths in a result remain valid while the agent
+    /// works; folders from earlier renders older than a day are removed first, since an agent previews dozens of
+    /// times a day and the system's own clean-up of the temporary folder takes days.
+    static func freshDirectory(in temporary: URL, now: Date = Date()) -> String {
+        let manager = FileManager.default
+        for name in (try? manager.contentsOfDirectory(atPath: temporary.path)) ?? [] where name.hasPrefix("menusprite-preview-") {
+            let url = temporary.appendingPathComponent(name, isDirectory: true)
+            if let modified = (try? manager.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date,
+               now.timeIntervalSince(modified) > previewLifetime {
+                try? manager.removeItem(at: url)
+            }
+        }
+        return temporary.appendingPathComponent("menusprite-preview-\(UUID().uuidString.prefix(8).lowercased())", isDirectory: true).path
     }
+    static let previewLifetime: TimeInterval = 24 * 3600
 
     // MARK: - Calls
 
@@ -159,7 +176,7 @@ struct MCPTools: Sendable {
         }
     }
 
-    func call(_ name: String, _ arguments: JSONValue) -> JSONValue {
+    func call(_ name: String, _ arguments: JSONValue, agent: String? = nil) -> JSONValue {
         let output: Output
         do {
             let arguments = ToolArguments(value: arguments)
@@ -193,6 +210,16 @@ struct MCPTools: Sendable {
             case "remove_sprite":
                 let raw = try client.result(.remove, try Envelope.arguments(SpriteReference(sprite: try arguments.string("sprite"))))
                 output = Output(text: "Removed \(try Envelope.decode(raw, as: RemoveResult.self).removed).")
+            case "report_barrier":
+                var report = BarrierReport(asked: try arguments.string("asked"), missing: try arguments.string("missing"),
+                                           workaround: try arguments.optionalString("workaround"), suggestion: try arguments.optionalString("suggestion"),
+                                           area: try arguments.optionalString("area"), sprite: try arguments.optionalString("sprite"))
+                report.agent = agent ?? "mcp"
+                let barrier = try Envelope.decode(try client.result(.barrier, try Envelope.arguments(report)), as: Barrier.self)
+                output = Output(text: Format.barrierRecorded(barrier))
+            case "list_barriers":
+                let raw = try client.result(.barriers, try Envelope.arguments(BarriersArgs(all: try arguments.bool("all"))))
+                output = Output(text: Format.barriers(try Envelope.decode(raw, as: BarriersResult.self)))
             case "open_board":
                 let raw = try client.result(.open, try Envelope.arguments(SpriteReference(sprite: try arguments.string("sprite"))))
                 let result = try Envelope.decode(raw, as: OpenResult.self)

@@ -78,12 +78,13 @@ final class AccountsPanelController: NSObject, NSWindowDelegate {
     private func installDismissal() {
         if let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !PanelAnchor.pointerIsOver(self.anchorWindow) else { return }
+                guard let self, !PanelInteraction.holdsBoards, !PanelAnchor.pointerIsOver(self.anchorWindow) else { return }
                 self.close()
             }
         }) { eventMonitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown], handler: { [weak self] event in
             MainActor.assumeIsolated {
+                guard !PanelInteraction.holdsBoards else { return }
                 if let self, event.window !== self.panel, event.window !== self.anchorWindow,
                    !PanelAnchor.pointerIsOver(self.anchorWindow) { self.close() }
             }
@@ -95,6 +96,7 @@ final class AccountsPanelController: NSObject, NSWindowDelegate {
             observers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 let activatedPID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
                 MainActor.assumeIsolated {
+                    guard !PanelInteraction.holdsBoards else { return }
                     if let activatedPID {
                         if activatedPID == ProcessInfo.processInfo.processIdentifier { return }
                         if NSWorkspace.shared.frontmostApplication?.processIdentifier != activatedPID { return }
@@ -311,7 +313,19 @@ private struct ProviderSection: View {
                 Spacer()
                 Toggle("Auto-switch", isOn: Binding(get: { autoSwitch }, set: { store.setAutoSwitch(provider, enabled: $0) }))
                     .toggleStyle(.switch).controlSize(.mini).font(.system(size: 12))
-                    .help("Switch to another saved account when session or weekly usage reaches \(Int(overview.config.autoSwitchThreshold))%. Shared with Claude Switcher.")
+                    .help("Switch to another saved account just before session or weekly usage reaches \(Int(overview.config.autoSwitchThreshold))% (at \(Int(AutoSwitchPolicy.switchPoint(overview.config.autoSwitchThreshold)))%), or as soon as a Claude Code session is refused for the limit. Shared with Claude Switcher.")
+            }
+            if provider == .claude {
+                HStack(spacing: 8) {
+                    Text("Continue stopped sessions after a switch").font(.system(size: 12))
+                    Spacer()
+                    Toggle("Continue stopped sessions after a switch", isOn: Binding(get: { store.resumeAfterSwitch }, set: { store.setResumeAfterSwitch($0) }))
+                        .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                }
+                .help("After the Claude login changes, types a continue line into each Claude Code session in iTerm2 that stopped at a usage limit, so it does not wait for the reset.")
+                if let status = store.resumeStatus {
+                    Text(status).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
             }
             if autoSwitch && store.claudeSwitcherRunning {
                 Text("Claude Switcher is running — it handles auto-switch.").font(.system(size: 12)).foregroundStyle(.secondary)

@@ -113,9 +113,39 @@ private let up = IslandMediaKey.volumeUp, down = IslandMediaKey.volumeDown, mute
     #expect(gate.value.handle(key(down, .up), modifiers: [], conditions: off) == .consume)
 }
 
+@Test func fineVolumeStepsMoveToTheNextWholePercent() {
+    func fine(_ current: Double, up: Bool, muted: Bool = false) -> Double {
+        IslandVolumeStep.apply(current: current, muted: muted, up: up, fine: true).volume
+    }
+    #expect(abs(fine(0.473, up: true) - 0.48) < 1e-9)
+    #expect(abs(fine(0.473, up: false) - 0.47) < 1e-9)
+    #expect(abs(fine(0.47, up: true) - 0.48) < 1e-9)
+    #expect(abs(fine(0.47000001, up: false) - 0.46) < 1e-9)
+    #expect(abs(fine(0.4699999, up: true) - 0.48) < 1e-9)
+    #expect(fine(0.995, up: true) == 1)
+    #expect(fine(1, up: true) == 1)
+    #expect(fine(0.004, up: false) == 0)
+    // From muted a fine step starts at 0 and unmutes at 1%.
+    let raised = IslandVolumeStep.apply(current: 0.8, muted: true, up: true, fine: true)
+    #expect(abs(raised.volume - 0.01) < 1e-9 && raised.unmute)
+}
+
+@Test func volumeToneFollowsTheSettingShiftFlipsItAndSilenceStaysSilent() {
+    #expect(IslandVolumeTone.shouldPlay(enabled: true, shiftHeld: false, level: 0.5, muted: false))
+    #expect(!IslandVolumeTone.shouldPlay(enabled: false, shiftHeld: false, level: 0.5, muted: false))
+    // Shift flips the setting either way, as macOS's keys do.
+    #expect(!IslandVolumeTone.shouldPlay(enabled: true, shiftHeld: true, level: 0.5, muted: false))
+    #expect(IslandVolumeTone.shouldPlay(enabled: false, shiftHeld: true, level: 0.5, muted: false))
+    // Muted, at 0, or with no settable volume: nothing to hear.
+    #expect(!IslandVolumeTone.shouldPlay(enabled: true, shiftHeld: false, level: 0.5, muted: true))
+    #expect(!IslandVolumeTone.shouldPlay(enabled: true, shiftHeld: false, level: 0, muted: false))
+    #expect(!IslandVolumeTone.shouldPlay(enabled: true, shiftHeld: false, level: nil, muted: false))
+    #expect(!IslandVolumeTone.shouldPlay(enabled: true, shiftHeld: false, level: .nan, muted: false))
+}
+
 @Test func volumeStepsAreASixteenthOrASixtyFourthAndClamp() {
     #expect(IslandVolumeStep.apply(current: 0.5, muted: false, up: true, fine: false).volume == 0.5625)
-    #expect(IslandVolumeStep.apply(current: 0.5, muted: false, up: false, fine: true).volume == 0.5 - 1.0 / 64)
+    #expect(IslandVolumeStep.apply(current: 0.5, muted: false, up: false, fine: true).volume == 0.49)
     #expect(IslandVolumeStep.apply(current: 1, muted: false, up: true, fine: false).volume == 1)
     #expect(IslandVolumeStep.apply(current: 0.01, muted: false, up: false, fine: false).volume == 0)
     // From muted the step starts at 0, and raising above 0 unmutes.

@@ -38,7 +38,9 @@ struct MenuSpriteMain {
         MenuBarIconRenderHarness.runIfRequested()
         KeepAwakeRenderHarness.runIfRequested()
         FanRenderHarness.runIfRequested()
+        PowerRenderHarness.runIfRequested()
         SpriteStudioRenderHarness.runIfRequested()
+        NewcomerRenderHarness.runIfRequested()
         // The agent server alone, on a scratch store, for testing the `menusprite` command end to end.
         AgentSandbox.runIfRequested()
         let app = NSApplication.shared
@@ -96,7 +98,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         powerStore = PowerStore(preferences: releasePreferences ?? .standard)
         // Restores the owned menu-bar spacing if anything cleared it. Silent, and a no-op unless the
         // stored keys have drifted; skipped on validation launches so they write nothing.
-        if backgroundWork { MenuBarSpacing.enforce() }
+        if backgroundWork {
+            MenuBarSpacing.enforce()
+            MenuBarSpacing.startGuarding()
+        }
         appWindow = AppWindowController(pages: .init(make: { [unowned self] in makePage($0) },
                                                      closed: { [unowned self] in pageClosed($0) },
                                                      visibility: { [unowned self] page, visible in
@@ -112,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                      spend: backgroundWork ? SpendService.shared : nil) { [weak self] _ in
             self?.monitoringStore.refresh()
         }
+        accounts.usageLoaded = { [weak self] in self?.monitoringStore.syncAIUsage() }
         accountsStore = accounts
         accountsPanel = AccountsPanelController(store: accounts)
         spriteMenuBar?.openAccounts = { [weak self] anchor, window in self?.accountsPanel?.toggle(anchor: anchor, anchorWindow: window) }

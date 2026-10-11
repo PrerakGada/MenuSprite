@@ -291,19 +291,19 @@ final class EnergyBoardController: NSViewController {
     @objc private func changeLED() { power.setLEDControl(ledToggle.state == .on) }
     /// macOS's own limit: the buttons act on it directly and say what macOS is doing.
     private func updateSystemLimitControls(_ enabled: Bool) {
-        let draining = power.isDraining && power.holdLevel == nil
+        let draining = power.dischargeActive
         setLimitTitle("Limit:", power.saverEnabled ? "\(power.band.upper)%" : "off")
         limitButton.toolTip = "macOS holds this limit, through sleep and even with MenuSprite quit. Drag the line on the battery bar to change it."
         topUpButton.title = power.topUpActive ? "Stop Top Up" : "Top Up"
         dischargeButton.title = draining ? "Stop Discharge" : "Discharge"
         topUpButton.contentTintColor = power.topUpActive ? .systemBlue : nil
-        dischargeButton.contentTintColor = draining ? .systemOrange : (power.holdLevel != nil ? .systemYellow : nil)
+        dischargeButton.contentTintColor = draining ? .systemOrange : nil
         topUpButton.isEnabled = enabled && power.canSetLimit && (power.topUpActive || power.snapshot.pluggedIn == true)
-        dischargeButton.isEnabled = enabled && power.canSetLimit && (draining || power.holdLevel != nil || power.canDischargeToLimit)
+        dischargeButton.isEnabled = enabled && power.canSetLimit && (draining || power.canDischargeToLimit)
         topUpButton.toolTip = power.batteryControlReason ?? "Charge to 100% once. Your \(power.band.upper)% limit returns when you unplug."
         dischargeButton.toolTip = power.batteryControlReason ?? (draining
             ? "macOS is running the Mac from the battery down to \(power.band.upper)%. Stop to hold the current level."
-            : "Run from the battery, cable connected, down to \(power.band.upper)%. No artificial workload.")
+            : "Above the limit the cable runs the Mac and the level is held. Discharge runs from the battery, cable connected, down to \(power.band.upper)%. No artificial workload.")
         applyButton.title = "Apply limit"; stopButton.title = "Turn limit off"
         applyButton.isEnabled = enabled && power.canSetLimit
         stopButton.isEnabled = enabled && power.canSetLimit && power.saverEnabled

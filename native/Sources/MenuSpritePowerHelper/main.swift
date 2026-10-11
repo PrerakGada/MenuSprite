@@ -57,12 +57,14 @@ listener.delegate = server
 var notifier: io_object_t = 0
 var port: IONotificationPortRef?
 var powerConnection: io_connect_t = 0
-// IOKit/IOMessage.h: iokit_common_msg(0x280/0x270); C macros are not imported by Swift.
+// IOKit/IOMessage.h: iokit_common_msg(0x280/0x270/0x300); C macros are not imported by Swift.
 powerConnection = IORegisterForSystemPower(nil,&port,{ _, _, message, argument in
     if message == 0xe0000280 {
         do { try server.controller.restoreAll() } catch { server.controller.lastError = error.localizedDescription }
         server.controller.schedule()
     }
+    // kIOMessageSystemHasPoweredOn, dark wakes included.
+    if message == 0xe0000300 { server.controller.didWake() }
     if message == 0xe0000280 || message == 0xe0000270 {
         IOAllowPowerChange(powerConnection, Int(bitPattern:argument))
     }

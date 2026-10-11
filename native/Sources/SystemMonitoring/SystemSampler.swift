@@ -36,7 +36,7 @@ public actor SystemSampler {
             let prefix = removed == .sensors ? "sensor." : removed.rawValue.lowercased() + "."
             counters = counters.filter { !$0.key.hasPrefix(prefix) }
         }
-        if !groups.contains(.sensors) { smc = nil }
+        if !groups.contains(.sensors) && !groups.contains(.battery) { smc = nil }
         activeGroups = groups
     }
 
@@ -330,7 +330,12 @@ public actor SystemSampler {
             if let capacity = number("AppleRawMaxCapacity")?.doubleValue, let design = number("DesignCapacity")?.doubleValue, design > 0 {
                 result["battery.capacityRatio"] = Reading(capacity / design * 100)
             }
-            if let rawVoltage = number("Voltage")?.doubleValue, rawVoltage > 0 {
+            smc = smc ?? SMCReader()
+            if let live = smc?.batteryFlow() {
+                result["battery.voltage"] = Reading(live.volts)
+                result["battery.current"] = Reading(live.amps)
+                result["battery.power"] = Reading(live.volts * live.amps)
+            } else if let rawVoltage = number("Voltage")?.doubleValue, rawVoltage > 0 {
                 result["battery.voltage"] = Reading(rawVoltage / 1000)
                 if let rawCurrent = number("InstantAmperage") ?? number("Amperage") {
                     let amps = Double(rawCurrent.int64Value) / 1000

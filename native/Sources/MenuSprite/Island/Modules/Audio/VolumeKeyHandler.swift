@@ -40,6 +40,7 @@ final class VolumeKeyHandler {
             controller.request(volume: result.volume, muted: result.unmute ? false : nil, own: false) { outcome in
                 if outcome == .failed { IslandSystemKeyTap.postToSystem(key) }
             }
+            controller.soundTone(shiftHeld: key.modifiers.contains(.shift) && !key.modifiers.isFine)
         case .toggleMute:
             controller.request(volume: nil, muted: !audio.isMuted, own: false) { outcome in
                 if outcome == .failed { IslandSystemKeyTap.postToSystem(key) }

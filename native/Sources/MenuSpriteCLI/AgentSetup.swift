@@ -7,16 +7,28 @@ import Foundation
 /// parse is left alone, and the previous file is copied aside first.
 struct AgentSetup: Sendable {
     enum Agent: String, CaseIterable, Sendable {
-        case claude, codex, cursor, claudeDesktop = "claude-desktop", antigravity
+        case claude, codex, copilot, gemini, antigravity, kimi, grok, cursor, claudeDesktop = "claude-desktop"
 
         init?(name: String) {
             switch name.lowercased() {
             case "claude", "claude-code", "claudecode": self = .claude
-            case "codex": self = .codex
+            case "codex", "codex-cli": self = .codex
+            case "copilot", "copilot-cli", "github-copilot", "gh-copilot": self = .copilot
+            case "gemini", "gemini-cli": self = .gemini
+            case "antigravity", "anti-gravity", "agy": self = .antigravity
+            case "kimi", "kimi-code", "kimi-cli": self = .kimi
+            case "grok", "grok-cli": self = .grok
             case "cursor": self = .cursor
             case "claude-desktop", "desktop", "claudedesktop": self = .claudeDesktop
-            case "antigravity", "anti-gravity": self = .antigravity
             default: return nil
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .claude: "Claude Code"; case .codex: "Codex"; case .copilot: "GitHub Copilot CLI"; case .gemini: "Gemini CLI"
+            case .antigravity: "Antigravity"; case .kimi: "Kimi Code"; case .grok: "Grok"; case .cursor: "Cursor"
+            case .claudeDesktop: "Claude Desktop"
             }
         }
     }
@@ -37,12 +49,18 @@ struct AgentSetup: Sendable {
     static let overview = """
         Register MenuSprite's MCP server with an agent:
           menusprite setup claude          Claude Code (runs claude mcp add, user scope)
-          menusprite setup codex           Codex (~/.codex/config.toml)
+          menusprite setup codex           Codex CLI (~/.codex/config.toml)
+          menusprite setup copilot         GitHub Copilot CLI (~/.copilot/mcp-config.json)
+          menusprite setup gemini          Gemini CLI (~/.gemini/settings.json)
+          menusprite setup antigravity     Antigravity, app and agy CLI (~/.gemini/config/mcp_config.json)
+          menusprite setup kimi            Kimi Code (~/.kimi-code/mcp.json)
+          menusprite setup grok            Grok CLI (~/.grok/config.toml)
           menusprite setup cursor          Cursor (~/.cursor/mcp.json)
           menusprite setup claude-desktop  Claude Desktop (claude_desktop_config.json)
-          menusprite setup antigravity     Antigravity (prints what to paste)
-        Add --print to see the change without making it.
-        ChatGPT's desktop app takes only remote connectors; there, use the menusprite command itself.
+          menusprite setup all             every one of these that is installed
+        Add --print to see the change without making it. Each file is merged, never replaced, and backed up first.
+        Any other agent with a shell can use the menusprite command itself (start with: menusprite guide);
+        ChatGPT's desktop app takes only remote connectors, so there it is the command or nothing.
 
         """
 
@@ -60,32 +78,86 @@ struct AgentSetup: Sendable {
 
     func run(agent name: String, printOnly: Bool) throws -> Outcome {
         guard let agent = Agent(name: name) else {
-            throw CommandError("Unknown agent “\(name)”: use claude, codex, cursor, claude-desktop or antigravity.")
+            throw CommandError("Unknown agent “\(name)”: use \(Agent.allCases.map(\.rawValue).joined(separator: ", ")) or all.")
         }
+        return try run(agent, printOnly: printOnly)
+    }
+
+    func run(_ agent: Agent, printOnly: Bool) throws -> Outcome {
         switch agent {
         case .claude: return try claude(printOnly: printOnly)
-        case .codex: return try codex(printOnly: printOnly)
+        case .codex:
+            return try toml(agent: agent, file: folder("CODEX_HOME", ".codex").appendingPathComponent("config.toml"),
+                            after: "Start a new Codex session to use it.", printOnly: printOnly)
+        case .grok:
+            // Grok writes the same table with `enabled = true` (`grok mcp add --scope user`).
+            return try toml(agent: agent, file: folder("GROK_HOME", ".grok").appendingPathComponent("config.toml"), extra: "enabled = true\n",
+                            after: "Start a new grok session to use it (grok mcp list shows it).", printOnly: printOnly)
+        case .copilot:
+            // The shape `copilot mcp add` writes: a local server allowed every tool.
+            let entry = JSONValue.object([JSONMember("type", "local"), JSONMember("command", .string(binaryPath)), JSONMember("args", ["mcp"]),
+                                          JSONMember("tools", ["*"])])
+            return try mergeJSON(agent: agent, file: folder("COPILOT_HOME", ".copilot").appendingPathComponent("mcp-config.json"), entry: entry,
+                                 after: "Start a new copilot session to use it (/mcp shows it).", printOnly: printOnly)
+        case .gemini:
+            return try mergeJSON(agent: agent, file: home.appendingPathComponent(".gemini/settings.json"),
+                                 after: "Start a new gemini session to use it (/mcp lists it).", printOnly: printOnly)
+        case .antigravity:
+            // One file serves the Antigravity app and its agy command line (the binary's own docs say so).
+            return try mergeJSON(agent: agent, file: home.appendingPathComponent(".gemini/config/mcp_config.json"),
+                                 after: "Start a new agy session, or refresh MCP Servers in the Antigravity app, to use it.", printOnly: printOnly)
+        case .kimi:
+            return try mergeJSON(agent: agent, file: folder("KIMI_CODE_HOME", ".kimi-code").appendingPathComponent("mcp.json"),
+                                 after: "Start a new kimi session (or /new) to use it.", printOnly: printOnly)
         case .cursor:
-            return try mergeJSON(agent: agent, file: home.appendingPathComponent(".cursor/mcp.json"), label: "Cursor",
+            return try mergeJSON(agent: agent, file: home.appendingPathComponent(".cursor/mcp.json"),
                                  after: "Cursor loads it from Settings → MCP; reload there if it does not appear.", printOnly: printOnly)
         case .claudeDesktop:
             return try mergeJSON(agent: agent, file: home.appendingPathComponent("Library/Application Support/Claude/claude_desktop_config.json"),
-                                 label: "Claude Desktop", after: "Quit and reopen Claude Desktop to load it.", printOnly: printOnly)
-        case .antigravity:
-            let file = home.appendingPathComponent(".gemini/antigravity/mcp_config.json").path
-            return Outcome(agent: agent.rawValue, changed: false, file: file, message: """
-                In Antigravity, open the agent panel's … menu → MCP Servers → Manage MCP Servers → View raw config \
-                (\(file)) and merge this into it, then refresh the server list:
-
-                \(snippet)
-
-                """)
+                                 after: "Quit and reopen Claude Desktop to load it.", printOnly: printOnly)
         }
+    }
+
+    /// Whether an agent is on this Mac: its command on PATH, its app, or its own settings folder.
+    func installed(_ agent: Agent) -> Bool {
+        let manager = FileManager.default
+        func app(_ name: String) -> Bool {
+            [URL(fileURLWithPath: "/Applications"), home.appendingPathComponent("Applications")]
+                .contains { manager.fileExists(atPath: $0.appendingPathComponent(name).path) }
+        }
+        switch agent {
+        case .claude: return find("claude") != nil
+        case .codex: return find("codex") != nil || manager.fileExists(atPath: folder("CODEX_HOME", ".codex").path)
+        case .copilot: return find("copilot") != nil
+        case .gemini: return find("gemini") != nil
+        case .antigravity: return find("agy") != nil || app("Antigravity.app")
+        case .kimi: return find("kimi") != nil || manager.fileExists(atPath: folder("KIMI_CODE_HOME", ".kimi-code").path)
+        case .grok: return find("grok") != nil || manager.fileExists(atPath: folder("GROK_HOME", ".grok").path)
+        case .cursor: return app("Cursor.app") || manager.fileExists(atPath: home.appendingPathComponent(".cursor").path)
+        case .claudeDesktop: return app("Claude.app")
+        }
+    }
+
+    /// `setup all`: every installed agent, one at a time; a failure is reported and the rest still run.
+    func runAll(printOnly: Bool) -> [Outcome] {
+        Agent.allCases.map { agent in
+            guard installed(agent) else {
+                return Outcome(agent: agent.rawValue, changed: false, file: nil, message: "\(agent.label): not installed, skipped.\n")
+            }
+            do { return try run(agent, printOnly: printOnly) }
+            catch { return Outcome(agent: agent.rawValue, changed: false, file: nil, message: "\(agent.label): \(error)\n") }
+        }
+    }
+
+    /// An agent's settings folder: its environment override, else `~/<name>`.
+    func folder(_ variable: String, _ name: String) -> URL {
+        environment[variable].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) } ?? home.appendingPathComponent(name)
     }
 
     var entry: JSONValue { .object([JSONMember("command", .string(binaryPath)), JSONMember("args", ["mcp"])]) }
 
-    var snippet: String {
+    var snippet: String { snippet(entry) }
+    func snippet(_ entry: JSONValue) -> String {
         JSONValue.object([JSONMember("mcpServers", .object([JSONMember("menusprite", entry)]))]).serialized(pretty: true)
     }
 
@@ -114,30 +186,34 @@ struct AgentSetup: Sendable {
             """)
     }
 
-    private func codex(printOnly: Bool) throws -> Outcome {
-        let folder = environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) } ?? home.appendingPathComponent(".codex")
-        let file = folder.appendingPathComponent("config.toml").resolvingSymlinksInPath()
-        let block = "[mcp_servers.menusprite]\ncommand = \(Self.tomlString(binaryPath))\nargs = [\"mcp\"]\n"
-        if printOnly { return Outcome(agent: "codex", changed: false, file: file.path, message: "Add this to \(file.path):\n\n\(block)") }
+    /// Codex and Grok keep MCP servers as `[mcp_servers.<name>]` tables in a TOML file; the table is appended,
+    /// never rewritten, and an existing one is left alone (two would make the file fail to parse).
+    private func toml(agent: Agent, file: URL, extra: String = "", after: String, printOnly: Bool) throws -> Outcome {
+        let file = file.resolvingSymlinksInPath()
+        let block = "[mcp_servers.menusprite]\ncommand = \(Self.tomlString(binaryPath))\nargs = [\"mcp\"]\n" + extra
+        if printOnly { return Outcome(agent: agent.rawValue, changed: false, file: file.path, message: "Add this to \(file.path):\n\n\(block)") }
         let existing = FileManager.default.contents(atPath: file.path).map { String(decoding: $0, as: UTF8.self) } ?? ""
         if Self.hasCodexServer(existing) {
-            return Outcome(agent: "codex", changed: false, file: file.path,
-                           message: "\(file.path) already has [mcp_servers.menusprite]; it was left as it is. It should read:\n\n\(block)")
+            return Outcome(agent: agent.rawValue, changed: false, file: file.path,
+                           message: "\(agent.label): \(file.path) already has [mcp_servers.menusprite]; it was left as it is. It should read:\n\n\(block)")
         }
         let backup = try backUp(file)
         var updated = existing
         if !updated.isEmpty { updated += updated.hasSuffix("\n") ? "\n" : "\n\n" }
         updated += block
         try write(updated, to: file)
-        return Outcome(agent: "codex", changed: true, file: file.path,
-                       message: "Added [mcp_servers.menusprite] to \(file.path)\(backup.map { " (previous file: \($0))" } ?? ""). Start a new Codex session to use it.\n")
+        return Outcome(agent: agent.rawValue, changed: true, file: file.path,
+                       message: "\(agent.label): added [mcp_servers.menusprite] to \(file.path)\(backup.map { " (previous file: \($0))" } ?? ""). \(after)\n")
     }
 
-    private func mergeJSON(agent: Agent, file: URL, label: String, after: String, printOnly: Bool) throws -> Outcome {
+    private func mergeJSON(agent: Agent, file: URL, entry custom: JSONValue? = nil, after: String, printOnly: Bool) throws -> Outcome {
         let file = file.resolvingSymlinksInPath()
+        let label = agent.label
+        let entry = custom ?? self.entry
+        let snippet = snippet(entry)
         if printOnly {
             return Outcome(agent: agent.rawValue, changed: false, file: file.path,
-                           message: "Merge this into \(file.path) (keep any other servers under \"mcpServers\"):\n\n\(snippet)\n")
+                           message: "\(label): merge this into \(file.path) (keep any other servers under \"mcpServers\"):\n\n\(snippet)\n")
         }
         var document = JSONValue.object([])
         if let data = FileManager.default.contents(atPath: file.path),
@@ -157,7 +233,7 @@ struct AgentSetup: Sendable {
         let backup = try backUp(file)
         try write(document.serialized(pretty: true) + "\n", to: file)
         return Outcome(agent: agent.rawValue, changed: true, file: file.path, message: """
-            \(replacing ? "Updated" : "Added") MenuSprite in \(file.path)\(backup.map { " (previous file: \($0))" } ?? ""). \(after)
+            \(label): \(replacing ? "updated" : "added") MenuSprite in \(file.path)\(backup.map { " (previous file: \($0))" } ?? ""). \(after)
 
             """)
     }

@@ -77,7 +77,7 @@ struct VolumeLevelView: View {
     @ViewBuilder private var level: some View {
         if let volume = audio.volume {
             IslandLevelSlider(value: Binding(get: { volume }, set: { controller.setVolume($0, own: true) }),
-                              accessibilityLabel: "Volume")
+                              editingChanged: { if !$0 { controller.soundTone() } }, accessibilityLabel: "Volume")
         } else if controller.hasReading {
             Text("Output unavailable")
                 .font(.system(size: 10))

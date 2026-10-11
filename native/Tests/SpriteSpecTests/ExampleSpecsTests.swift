@@ -159,7 +159,7 @@ private func readmeSummaries() throws -> [String: String] {
 
 /// The guide lands in an agent's context: it must stay compact.
 @Test func guideStaysCompact() {
-    #expect(AgentGuide.markdown.count < 21_500, "the guide is \(AgentGuide.markdown.count) characters")
+    #expect(AgentGuide.markdown.count < 23_000, "the guide is \(AgentGuide.markdown.count) characters")
     #expect(AgentGuide.markdown.hasPrefix("# MenuSprite authoring guide"))
 }
 

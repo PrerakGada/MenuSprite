@@ -193,10 +193,10 @@ final class SpriteContextMenu: NSObject, NSMenuDelegate {
         let topUp = add(menu, power.topUpActive ? "Stop top up" : "Top up to 100% once", #selector(topUp))
         topUp?.state = power.topUpActive ? .on : .off
         topUp?.isEnabled = power.topUpActive || power.snapshot.pluggedIn == true
-        let draining = power.isDraining && power.holdLevel == nil
-        let discharge = add(menu, draining ? "Stop discharging (hold here)" : (power.holdLevel != nil ? "Resume discharging to \(power.band.upper)%" : "Discharge to \(power.band.upper)%"), #selector(discharge))
+        let draining = power.dischargeActive
+        let discharge = add(menu, draining ? "Stop discharging (hold here)" : "Discharge to \(power.band.upper)%", #selector(discharge))
         discharge?.state = draining ? .on : .off
-        discharge?.isEnabled = draining || power.holdLevel != nil || power.canDischargeToLimit
+        discharge?.isEnabled = draining || power.canDischargeToLimit
         if power.helperInstalled {
             let led = add(menu, "MagSafe light shows charge state", #selector(toggleLED))
             led?.state = power.ledControl ? .on : .off

@@ -91,6 +91,34 @@ fetch other accounts only after the active one is exhausted. The flag is the sha
 apps cannot both switch; the board says so. Outcomes appear in the board, without notifications.
 Validation and measurement launches do not start the check.
 
+**Before the wall, not at it (10 Oct 2026).** At 100% Claude Code has already been refused and every
+running session stops ("You've hit your weekly limit"), so switching at the threshold always came minutes
+late. MenuSprite now switches at the threshold less `AutoSwitchPolicy.headroom` (1 point: 99% for the
+shared 100, Prerak's call), and a target must be below that point too. When the active account's
+figures could not be refreshed (429 cooldown, offline, login awaiting renewal: `UsageService` serves the
+last good snapshot with a `notice`), the switch point drops by `blindHeadroom` (2: 98%), since those
+figures can be minutes old. Checks run every 300 s, every 60 s
+once a session or weekly window passes 90% (the usage pacer's fast ladders now watch the weekly window
+too; from 98% the pacer fetches every 120 s and holds that for 30 min of unchanged figures), and at
+once when a Claude Code transcript records a fresh `usage_limit_reached` for the session or weekly limit
+on the live login (looked for every 30 s while Claude auto-switch is on): a refusal outranks cached figures.
+
+## Stopped sessions carry on after a switch
+
+A session that hit the wall and chose "continue automatically" waits on a timer for the reset; Claude
+Code 2.1.296 re-checks early only on its own triggers (a model change, a limit-reset grant, a submitted
+prompt), never when the login changes underneath it. Its peer messaging socket is authenticated and is not
+used. So after any Claude switch (board, auto-switch, Add account), MenuSprite waits 40 s (Claude Code
+caches its keychain read for 30 s), finds interactive sessions whose transcript ends at a wall from before
+the new login settled and whose reset is still ahead (`LimitWall`, `ClaudeWallScanner`: registry + at most
+256 KiB of each idle transcript's tail), and types a continue line into each one's iTerm2 session, matched
+by tty (`TerminalTyper`: text, then Return 0.6 s later). A second pass runs 60 s later. A wall after the
+login settled came from the new account and is left alone; no session is typed into twice for one wall.
+Board toggle **Continue stopped sessions after a switch** (on by default, `MenuSprite.ResumeSessionsAfterSwitch`).
+Needs the Apple Events entitlement and Automation permission for iTerm2 (asked the first time it types);
+sessions in other terminals are counted and named in the board, not reached. Text already typed in a
+stopped session's prompt is submitted with the line. **Not yet exercised on a real wall.**
+
 Auto-switch cannot tell a lapsed subscription from an account whose usage simply failed to load:
 both count as "unknown", and an unknown account is still a valid target (the switcher's rule). With
 Claude auto-switch on and only an inactive second account saved — the state on 11 September — reaching

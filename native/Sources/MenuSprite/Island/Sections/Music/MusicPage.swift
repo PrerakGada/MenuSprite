@@ -226,7 +226,7 @@ struct MusicInlineVolume: View {
             .accessibilityLabel(audio.isMuted ? "Unmute" : "Mute")
             if let volume = audio.volume {
                 IslandLevelSlider(value: Binding(get: { audio.isMuted ? 0 : volume }, set: { audio.setVolume($0) }),
-                                  accessibilityLabel: "Volume")
+                                  editingChanged: { if !$0 { audio.volumeEditEnded() } }, accessibilityLabel: "Volume")
                     .frame(width: 150, height: 24)
             } else {
                 Text("Output unavailable").font(.system(size: 10)).foregroundStyle(IslandStyle.secondaryText)

@@ -136,6 +136,32 @@ enum Format {
         return "Notes:\n" + notes.map { "  - " + $0.replacingOccurrences(of: "\n", with: "\n    ") + "\n" }.joined()
     }
 
+    static func barrierRecorded(_ barrier: Barrier) -> String {
+        let again = barrier.count > 1 ? " It has now been reported \(barrier.count) times." : ""
+        return "Recorded barrier \(barrier.id) (\(barrier.report.area ?? "other")): \(barrier.report.missing)\(again)\n"
+            + "Tell the user it needs a change to MenuSprite itself; `menusprite barriers` lists what is open.\n"
+    }
+
+    /// Open barriers (and resolved ones when listed), most recent first.
+    static func barriers(_ result: BarriersResult) -> String {
+        guard !result.barriers.isEmpty else {
+            return result.resolved == 0 ? "No barriers recorded: everything asked for so far could be built.\n"
+                : "No open barriers (\(result.resolved) resolved; --all lists them).\n"
+        }
+        var text = "\(result.open) open, \(result.resolved) resolved · \(result.path)\n"
+        for barrier in result.barriers {
+            let report = barrier.report
+            let times = barrier.count > 1 ? " ×\(barrier.count)" : ""
+            let date = String(barrier.reported.prefix(10))
+            text += "\n\(barrier.id)  [\(report.area ?? "other")]\(times)  \(date)\(report.agent.map { " · \($0)" } ?? "")\(report.sprite.map { " · \($0)" } ?? "")\n"
+            text += "  missing:    \(report.missing)\n  asked:      \(report.asked)\n"
+            if let workaround = report.workaround { text += "  workaround: \(workaround)\n" }
+            if let suggestion = report.suggestion { text += "  suggestion: \(suggestion)\n" }
+            if let resolved = barrier.resolved { text += "  resolved:   \(resolved.prefix(10)) — \(barrier.resolution ?? "")\n" }
+        }
+        return text
+    }
+
     static func refresh(_ result: RefreshResult, sprite: String) -> String {
         "Ran “\(sprite)”'s commands again.\n" + (result.values.isEmpty ? "It has no values.\n" : "Values:\n" + values(result.values))
     }

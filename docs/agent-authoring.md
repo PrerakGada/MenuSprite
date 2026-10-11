@@ -284,7 +284,9 @@ menusprite remove <sprite>
 menusprite enable|disable|show|hide <sprite> · menusprite side <sprite> left|right
 menusprite open <sprite>                          pop its board open on screen
 menusprite mcp                                    MCP server on stdio
-menusprite setup <claude|codex|cursor|claude-desktop|antigravity> [--print]   register the MCP server
+menusprite setup <claude|codex|copilot|gemini|antigravity|kimi|grok|cursor|claude-desktop|all> [--print]   register the MCP server
+menusprite barrier "<what is missing>" --asked "<what was wanted>" [--workaround] [--suggest] [--area] [--sprite]   record a barrier
+menusprite barriers [--all] · menusprite barriers resolve <id> "<what changed>"   list what still needs code, or close one
 ```
 
 `<sprite>` is a name (case-insensitive), an id or an id prefix of at least 4 characters. Every verb takes
@@ -338,19 +340,44 @@ socket path holds at most 103 bytes, so use a short `--socket` path.
 the block reports and preview images), `preview_sprite` (a saved sprite or a draft spec; `appearance` dark, light,
 both or system; `board`; `values`), `test_command` (`sprite` or a draft's `files`), `refresh_sprite`, `set_sprite`
 (enabled, in menu bar, side), `remove_sprite` (its folder goes to the Trash; Undo in the Sprites window restores
-it), `open_board`. Tools that run the user's commands are marked `openWorldHint` and not read-only. Resources:
+it), `report_barrier`, `list_barriers`, `open_board`. Tools that run the user's commands are marked `openWorldHint` and not read-only. Resources:
 `menusprite://guide`, `menusprite://schema` and `menusprite://examples/<name>`. Answers are written one whole
 message at a time, so parallel calls never interleave. The server's `instructions` tell the agent to read the
-guide first, start from an example, test draft scripts, look at both appearances and use stand-ins. Clients: Claude Code (`claude mcp add menusprite -- menusprite mcp`), Claude
-Desktop, Codex (`[mcp_servers.menusprite]`), Cursor, Antigravity. ChatGPT's desktop app only accepts remote
-connectors, so there it is the CLI or nothing.
+guide first, start from an example, test draft scripts, look at both appearances and use stand-ins. Clients (`menusprite setup <agent>` or `setup all` writes
+each one's own config): Claude Code, Codex CLI, GitHub Copilot CLI, Antigravity (app and `agy`), Gemini CLI, Kimi Code,
+Grok CLI, Cursor, Claude Desktop. Claude Code, Codex, Copilot and `agy` have each built sprites end to end through it
+(1 Oct 2026); Gemini, Kimi and Grok could not be run here (no usable account). ChatGPT's desktop app only accepts
+remote connectors, so there it is the CLI or nothing; any agent with a shell can use the CLI.
+
+## Barriers
+
+3 October 2026 · Prerak: agents should make every change without anyone editing MenuSprite or relaunching it, and
+"I'll know when I am hitting a barrier and at what point I will have to edit the code. We can gradually keep
+reducing those points so that everything is 100% customizable."
+
+A **barrier** is something a person asked for that no spec can express. The guide, the Claude Code skill and the
+MCP server's instructions all give agents one rule: never edit MenuSprite's code, `monitoring.json` or its `Sprites`
+folder; tell the person plainly what is missing; build the closest honest version if it is worth having and say
+how it differs; and record the barrier in general terms (`report_barrier`, or
+`menusprite barrier "<missing>" --asked "<wanted>" [--workaround …] [--suggest …] [--area …] [--sprite …]`).
+
+The app keeps them in `~/Library/Application Support/MenuSprite/barriers.jsonl` (a sandbox in its own directory):
+one JSON line per report (`asked`, `missing`, `workaround`, `suggestion`, `area` one of face, board, values, rules,
+actions, data, tools, other; `sprite`; `agent`, taken from the MCP client's name or `--agent`/`MENUSPRITE_AGENT`/
+Claude Code's `CLAUDECODE`) or resolution. Reports whose `missing` matches ignoring case and spacing are one barrier
+with a count; a repeat fills in what the first left out but keeps its wording. `menusprite barriers` lists the open
+ones, most recently reported first (`--all` adds resolved ones); `menusprite barriers resolve <id> "<what changed>"`
+closes one when a change to MenuSprite makes it expressible. A report after that opens it again as a new barrier:
+the fix did not cover it. **Working on MenuSprite's code, start from `menusprite barriers`: it is the backlog of
+what still needs code.**
 
 ## Socket protocol (AgentProtocol)
 
 One request per connection: a compact JSON object and `\n`; one response the same way. Requests are
 `{"v":1,"op":"…","args":{…}}`; responses `{"ok":true,"result":…}` or
 `{"ok":false,"error":{"code":"…","message":"…","diagnostics":[…]}}`. Ops: `hello`, `readings`, `list`, `get`,
-`validate`, `apply`, `remove`, `set`, `run`, `render`, `open`, `refresh` (`{sprite}` → `{values}`). Requests are capped
+`validate`, `apply`, `remove`, `set`, `run`, `render`, `open`, `refresh` (`{sprite}` → `{values}`), `barrier`
+(`BarrierReport` → `Barrier`), `barriers` (`{all, resolve, resolution}` → `{barriers, open, resolved, path}`). Requests are capped
 at 8 MiB. The socket is created
 0600 and the server checks the peer's uid (`getpeereid`). Only the ordinary app launch serves it, never a
 validation or render launch.

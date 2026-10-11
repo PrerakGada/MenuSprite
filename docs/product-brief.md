@@ -15,6 +15,9 @@ Focus on Prerak's important daily tools and very low memory use. Marketplace,
 social and public extension-platform work are retained for later; they do not
 block the first usable app. The six daily-tool areas are recorded in that brief;
 capture/clipboard details and fan-control depth remain for later steps.
+**1 October 2026:** a full clipboard manager and a full capture tool are no longer planned here. They are
+separate apps, Pastebook and Screenroll (`~/Developer/Pastebook`, `~/Developer/Screenroll`); MenuSprite can show
+their data through their command-line tools. The Island's small Clipboard and Recent captures sections stay as they are.
 
 The [native planning pack](planning/README.md) expands this brief into a working
 PRD, feature specification, architecture, and acceptance plan. It is a discussion

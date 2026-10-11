@@ -83,6 +83,28 @@ struct CLI: Sendable {
             guard let example = AgentExamples.named(name) else { throw MCPTools.unknownExample(name) }
             console.write(MCPTools.exampleText(example) + "\n")
             return ExitStatus.ok
+        case "barrier":
+            guard let asked = invocation.option("asked"), !asked.trimmingCharacters(in: .whitespaces).isEmpty else {
+                throw UsageError("Say what the person wanted with --asked \"…\"; the words after barrier say what is missing.", verb: "barrier")
+            }
+            let report = BarrierReport(asked: asked, missing: invocation.joined, workaround: invocation.option("workaround"),
+                                       suggestion: invocation.option("suggest"), area: invocation.option("area"), sprite: invocation.option("sprite"),
+                                       agent: invocation.option("agent") ?? environment["MENUSPRITE_AGENT"] ?? (environment["CLAUDECODE"] == "1" ? "claude-code" : "cli"))
+            let raw = try client.result(.barrier, try Envelope.arguments(report))
+            if json { emit(raw) } else { console.write(Format.barrierRecorded(try Envelope.decode(raw, as: Barrier.self))) }
+            return ExitStatus.ok
+        case "barriers":
+            var args = BarriersArgs(all: invocation.has("all") ? true : nil)
+            if let first = invocation.words.first {
+                guard first == "resolve", invocation.words.count >= 3 else {
+                    throw UsageError("To close one: menusprite barriers resolve <id> <how it was resolved>.", verb: "barriers")
+                }
+                args.resolve = invocation.words[1]
+                args.resolution = invocation.words.dropFirst(2).joined(separator: " ")
+            }
+            let raw = try client.result(.barriers, try Envelope.arguments(args))
+            if json { emit(raw) } else { console.write(Format.barriers(try Envelope.decode(raw, as: BarriersResult.self))) }
+            return ExitStatus.ok
         case "remove":
             let raw = try client.result(.remove, try Envelope.arguments(SpriteReference(sprite: invocation.joined)))
             if json { emit(raw) } else { console.write("Removed \(try Envelope.decode(raw, as: RemoveResult.self).removed).\n") }
@@ -265,13 +287,17 @@ struct CLI: Sendable {
         guard let name = invocation.words.first else { console.write(AgentSetup.overview); return ExitStatus.ok }
         let binary = AgentSetup.stableBinary(home: home, executable: CLIVersion.executable)
         let setup = AgentSetup(home: home, environment: environment, binaryPath: binary.path, processRunner: processRunner)
-        let outcome = try setup.run(agent: name, printOnly: invocation.has("print"))
-        let message = (binary.note.map { "Note: \($0)\n" } ?? "") + outcome.message
+        let printOnly = invocation.has("print")
+        let outcomes = name.lowercased() == "all" ? setup.runAll(printOnly: printOnly) : [try setup.run(agent: name, printOnly: printOnly)]
+        let note = binary.note.map { "Note: \($0)\n" } ?? ""
         if json {
-            emit(.object(pairs: [("agent", .string(outcome.agent)), ("command", .string(binary.path)), ("changed", .bool(outcome.changed)),
-                                 ("file", outcome.file.map(JSONValue.string)), ("message", .string(message))]))
+            let rows = outcomes.map { outcome in
+                JSONValue.object(pairs: [("agent", .string(outcome.agent)), ("command", .string(binary.path)), ("changed", .bool(outcome.changed)),
+                                         ("file", outcome.file.map(JSONValue.string)), ("message", .string(outcome.message))])
+            }
+            emit(outcomes.count == 1 ? rows[0] : .object(pairs: [("note", binary.note.map(JSONValue.string)), ("agents", .array(rows))]))
         } else {
-            console.write(message)
+            console.write(note + outcomes.map(\.message).joined(separator: outcomes.count > 1 ? "\n" : ""))
         }
         return ExitStatus.ok
     }

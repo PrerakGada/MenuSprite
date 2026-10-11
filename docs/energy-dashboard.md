@@ -115,11 +115,16 @@ Long gaps and recorded failed samples break the chart line. Missing, nonfinite,
 out-of-range or stale readings remain unavailable rather than becoming zero.
 The page does not collect screenshots, open private files or request permissions.
 
-Power values come from the existing PSTR and PDTR firmware readings and signed
-battery voltage × current. A positive difference is `adapter − system − battery`
-and is labeled as unaccounted loads/losses. If inputs are missing or do not balance,
-the difference is unavailable. Independent sensor observations are not a wall-meter
-measurement and are not forced to add up.
+Power values come from the PDTR firmware reading and the battery's live SMC current × voltage
+(`B0AC` × `B0AV`, refreshed every second). AppleSmartBattery's `InstantAmperage` is republished
+only about once a minute, so it is a fallback only: a flow built on it showed the previous battery
+state for up to a minute after every switch, drawn as tens of watts of "Other" (8 October: adapter
+84.4, Mac 19.4, a stale −16.7 W battery, 81.7 W "Other"). The Mac's draw is adapter − battery at
+the same instant; PSTR equals exactly that sum one SMC tick earlier (290 of 292 samples on Nebula),
+so pairing it with the current adapter reading drew its lag as up to ±11 W of "Other". PSTR is
+used only when the adapter or battery reading is missing. Where the pack charges harder than the
+adapter supplies, the flow keeps PSTR and marks the imbalance. These are firmware observations,
+not a wall-meter measurement.
 
 Motion uses a native AppKit drawing surface, refreshed at 24 frames per second
 only while needed. A cached static flow image avoids rerendering all labels on

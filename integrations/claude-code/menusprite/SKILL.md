@@ -47,14 +47,34 @@ values are not `—`, and colours read in both modes. A value showing `—` is a
 and `menusprite run` tests it. A failed script block comes with its spec path and the end of its stderr.
 
 Draw the states you cannot make happen with stand-ins, so every rule branch is seen:
-`--value review=0`, `--value state=Stopped`, `--value session.pace=over` (with `apply --preview` or
-`menusprite preview "<name>" --both`). For the failure look, preview a copy whose command is `exit 1`.
+`--value review=0`, `--value state=Stopped`, `--value session.pace=over`, and `--value review=null` for the
+failure look (with `apply --preview` or `menusprite preview "<name>" --both`).
 
-Finish with `menusprite open "<name>"` so the user sees the board, and tell them what it shows and how often
-each command runs.
+Tell the user what it shows and how often each command runs. `menusprite open "<name>"` pops the board on screen;
+do it only if they want to see it now.
+
+## 4. When MenuSprite cannot do it
+
+If what the user wants cannot be expressed in a spec (a block, property, reading, action or behaviour MenuSprite
+lacks), that is a **barrier**. Do not edit MenuSprite's source, `monitoring.json` or its `Sprites` folder, and do
+not hide the gap behind a fragile hack. After checking the guide and examples:
+
+1. Tell the user plainly: "MenuSprite can't do X yet; that needs a change to MenuSprite itself."
+2. Build the closest honest version if it is worth having, and say how it differs.
+3. Record it, in general terms, reusing the wording of an existing one for the same gap (`menusprite barriers`):
+
+```sh
+menusprite barrier "boards have no text input" --asked "a box on the board where I type a todo" \
+  --workaround "a button that opens todo.txt in TextEdit" --suggest "an input block that runs a command with the text" \
+  --area board --sprite "Todo"
+```
+
+These records are MenuSprite's to-do list: each one closed makes more of it customisable without code.
 
 ## Rules
 
+- Saving the sprite (`menusprite apply`) and recording a barrier are the job you were asked to do: when the user
+  says to run only read-only commands, that means the commands you test, not `apply` or `barrier`.
 - Ask before `menusprite remove`. Do not run a switch's `on`/`off` commands or other state-changing commands to
   test them unless the user agrees; test the read-only ones.
 - Keep it light: local commands and services on 127.0.0.1 every 10–30 s; slow commands 60 s or more; remote APIs
